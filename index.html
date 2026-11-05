@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="es-PE">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#314218">
+<title>Optimizador de rutas de reparto</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<link rel="stylesheet" href="estilos.css">
+
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org; font-src 'self'; connect-src 'self' https://nominatim.openstreetmap.org https://router.project-osrm.org; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="theme-color" content="#314218">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Rutas">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+</head>
+<body>
+<a class="skip" href="#principal">Saltar al contenido</a>
+
+<div class="ticker" id="ticker" role="region" aria-label="Avisos importantes">
+  <div class="ticker-vista">
+    <div class="ticker-pista">
+      <ul class="ticker-grupo"><li>Sin tráfico en vivo: el tráfico es un perfil por hora que tú defines</li><li>Las tarifas de peaje y tus costos los pones tú: la aplicación no trae precios</li><li>Método heurístico: no garantiza el óptimo absoluto</li><li>Direcciones y calles reales usan OpenStreetMap (internet); sin conexión se estima en línea recta</li><li>Las cotizaciones son un borrador, no un comprobante de pago</li></ul>
+      <ul class="ticker-grupo" aria-hidden="true"><li>Sin tráfico en vivo: el tráfico es un perfil por hora que tú defines</li><li>Las tarifas de peaje y tus costos los pones tú: la aplicación no trae precios</li><li>Método heurístico: no garantiza el óptimo absoluto</li><li>Direcciones y calles reales usan OpenStreetMap (internet); sin conexión se estima en línea recta</li><li>Las cotizaciones son un borrador, no un comprobante de pago</li></ul>
+    </div>
+  </div>
+  <button id="btn-ticker" type="button" title="Detener o reanudar el desplazamiento de los avisos">Pausar</button>
+</div>
+
+<header class="hero">
+  <h1>Optimizador de rutas</h1>
+  <p class="sub">Reparto y visitas con varios vehículos, tráfico por hora y peajes. Funciona sin instalar nada (el mapa, las direcciones y las calles reales necesitan internet).</p>
+  <div class="top-actions">
+    <button id="btn-proy-guardar" title="Descarga un archivo .json con todo tu trabajo">Guardar proyecto</button>
+    <button id="btn-proy-cargar" title="Abre un proyecto .json guardado antes">Abrir proyecto</button>
+    <input type="file" id="file-proy" accept=".json,application/json" hidden>
+    <button id="btn-nuevo" class="peligro" title="Borra todo y empieza de cero">Nuevo (vaciar todo)</button>
+  </div>
+</header>
+
+<div id="aviso-motor" class="msg error" hidden role="alert" style="margin:8px 16px">
+  No se encontró el archivo <code>motor.js</code> en la misma carpeta que esta página. Sin él no se puede optimizar. Vuelve a copiar la carpeta completa.
+</div>
+
+<div class="layout">
+  <!-- ============ PANEL IZQUIERDO ============ -->
+  <section class="panel" id="principal" aria-label="Datos y resultados">
+    <div class="tabs" role="tablist" aria-label="Pasos">
+      <button role="tab" id="tab-datos" aria-controls="pane-datos" aria-selected="true"><span class="n">1</span>Datos</button>
+      <button role="tab" id="tab-flota" aria-controls="pane-flota" aria-selected="false"><span class="n">2</span>Flota y costos</button>
+      <button role="tab" id="tab-peajes" aria-controls="pane-peajes" aria-selected="false"><span class="n">3</span>Peajes</button>
+      <button role="tab" id="tab-trafico" aria-controls="pane-trafico" aria-selected="false"><span class="n">4</span>Tráfico</button>
+      <button role="tab" id="tab-res" aria-controls="pane-res" aria-selected="false"><span class="n">5</span>Resultados</button>
+      <button role="tab" id="tab-flete" aria-controls="pane-flete" aria-selected="false"><span class="n">6</span>Flete a cobrar</button>
+    </div>
+
+    <!-- ---- 1. DATOS ---- -->
+    <div class="pane" id="pane-datos" role="tabpanel" aria-labelledby="tab-datos">
+      <div class="banner-ej" id="banner-ej" hidden>EJEMPLO – datos ficticios (clientes, costos y peajes inventados solo para probar). Edítalos o pulsa “Nuevo” para empezar con los tuyos.</div>
+
+      <div class="card">
+        <h2>Depósito (punto de salida)</h2>
+        <div class="grid">
+          <div><label for="dep-nombre">Nombre</label><input id="dep-nombre" data-k="deposito.nombre" autocomplete="off"></div>
+          <div><label for="dep-lat">Latitud</label><input id="dep-lat" data-k="deposito.lat" inputmode="decimal" placeholder="-12.0464"></div>
+          <div><label for="dep-lon">Longitud</label><input id="dep-lon" data-k="deposito.lon" inputmode="decimal" placeholder="-77.0428"></div>
+        </div>
+        <p class="ayuda">Tip: busca la dirección aquí abajo, o elige “Ubicar depósito” sobre el mapa y haz clic donde está tu almacén.</p>
+      </div>
+
+      <div class="card" id="card-busqueda">
+        <h2>Buscar dirección</h2>
+        <div class="fila-busq">
+          <div style="flex:1 1 220px"><label for="busq-q" class="visually-hidden">Dirección a buscar</label>
+            <input id="busq-q" type="search" placeholder="Ej.: Av. Larco 345, Miraflores" autocomplete="off"></div>
+          <button id="btn-buscar" class="primario">Buscar</button>
+        </div>
+        <p class="ayuda privacidad"><b>Privacidad:</b> la dirección que escribes se envía al servicio público de OpenStreetMap (Nominatim). Si no quieres enviarla, ubica el punto con clic en el mapa o con latitud y longitud.</p>
+        <div id="busq-res" aria-live="polite"></div>
+        <details style="margin-top:6px">
+          <summary>Geocodificar una lista de direcciones</summary>
+          <label for="geo-lista" class="ayuda">Una dirección por línea (o <code>nombre | dirección</code>; también sirve pegar dos columnas de Excel). Se buscan una por segundo; las dudosas quedan marcadas en amarillo para que las confirmes.</label>
+          <textarea id="geo-lista" placeholder="Bodega Perú | Av. Arequipa 1200, Lince&#10;Jr. de la Unión 500, Cercado de Lima" spellcheck="false"></textarea>
+          <div class="acciones">
+            <button id="btn-geo-lista">Buscar y agregar como paradas</button>
+            <button id="btn-geo-cancelar" hidden>Cancelar</button>
+          </div>
+          <div id="geo-estado" class="ayuda" aria-live="polite"></div>
+        </details>
+        <p class="ayuda">Búsqueda con <b>Nominatim de OpenStreetMap</b> (© colaboradores de OpenStreetMap). Es un servicio público gratuito de uso justo: máximo 1 consulta por segundo, sin envíos masivos. Las direcciones que busques se envían a nominatim.openstreetmap.org; los resultados se guardan en este navegador para no repetir consultas. Revisa siempre que el punto caiga donde debe.</p>
+      </div>
+
+      <div class="card">
+        <h2>Paradas a visitar <small id="cont-paradas" class="suave"></small></h2>
+        <div class="acciones">
+          <button id="btn-ejemplo" class="primario">Cargar ejemplo</button>
+          <button id="btn-agregar-fila">+ Agregar parada</button>
+          <button id="btn-csv-importar">Importar CSV</button>
+          <input type="file" id="file-csv" accept=".csv,.txt,text/csv,text/plain" hidden>
+          <button id="btn-csv-exportar">Exportar CSV</button>
+          <label for="csv-sep" class="visually-hidden">Separador del CSV</label>
+          <select id="csv-sep" data-k="csvSep" style="width:auto" title="Separador al exportar"><option value=",">separador: , (coma)</option><option value=";">separador: ; (Excel español)</option></select>
+          <button id="btn-quitar-todas" class="peligro">Quitar todas</button>
+        </div>
+        <div class="tabla-scroll">
+          <table id="tabla-paradas">
+            <thead><tr>
+              <th scope="col">ID</th><th scope="col">Nombre</th><th scope="col">Dirección</th><th scope="col">Latitud</th><th scope="col">Longitud</th>
+              <th scope="col" title="En la misma unidad que la capacidad del vehículo (kg, cajas…)">Demanda</th>
+              <th scope="col" title="Minutos de descarga o atención">Servicio (min)</th>
+              <th scope="col" title="Hora más temprana para atender (opcional)">Desde</th>
+              <th scope="col" title="Hora más tarde para empezar a atender (opcional). Si es menor que “Desde”, la ventana cruza la medianoche (+1)">Hasta</th>
+              <th scope="col"><span class="visually-hidden">Acciones</span></th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="ayuda">También puedes agregar paradas con clic en el mapa. “Desde/Hasta” = ventana horaria del cliente (vacío = cualquier hora); si “Hasta” es menor que “Desde”, la ventana cruza la medianoche y se muestra con (+1).
+          Columnas del CSV: <code>nombre,lat,lon,demanda,servicio_min,ventana_ini,ventana_fin,direccion</code> (separador <code>;</code>, <code>,</code> o tabulador; se detecta solo). Si el CSV trae <code>direccion</code> pero no lat/lon, las direcciones se buscan solas (una por segundo).
+          Una fila con nombre <code>DEPOSITO</code> fija el depósito.</p>
+        <fieldset>
+          <legend>Al importar</legend>
+          <label class="chk" style="font-weight:500"><input type="radio" name="modo-imp" value="reemplazar" checked> Reemplazar las paradas actuales</label>
+          <label class="chk" style="font-weight:500"><input type="radio" name="modo-imp" value="agregar"> Agregar al final</label>
+        </fieldset>
+        <details>
+          <summary>Pegar filas copiadas desde Excel</summary>
+          <label for="pegar-excel" class="ayuda">Copia las celdas en Excel (con o sin la fila de encabezados) y pégalas aquí.</label>
+          <textarea id="pegar-excel" placeholder="nombre&#9;lat&#9;lon&#9;demanda&#9;servicio_min&#9;ventana_ini&#9;ventana_fin"></textarea>
+          <div class="acciones"><button id="btn-pegar-importar">Importar lo pegado</button></div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>Tu ruta actual <small class="suave">(opcional, para medir el ahorro)</small></h2>
+        <label for="ruta-actual">Una línea por vehículo, con los ID (o nombres) en el orden que visitas hoy, separados por coma</label>
+        <textarea id="ruta-actual" data-k="actual" placeholder="Vehículo 1: C3, C1, C2&#10;Vehículo 2: C5, C4" spellcheck="false"></textarea>
+        <p class="ayuda">Si lo llenas, el resultado compara el costo de tu ruta de hoy contra la optimizada. Deben aparecer todas las paradas, una sola vez. Puedes escribir “Vehículo 1:” al inicio de cada línea. Se evalúa con los costos del primer tipo de vehículo.</p>
+      </div>
+    </div>
+
+    <!-- ---- 2. FLOTA ---- -->
+    <div class="pane" id="pane-flota" role="tabpanel" aria-labelledby="tab-flota" hidden>
+      <div class="banner-ej" id="banner-ej2" hidden>EJEMPLO – editar: los valores de costos son inventados para la demostración.</div>
+      <div class="card">
+        <h2>Tipos de vehículo <span class="etiqueta-ej" data-ej hidden>EJEMPLO – editar</span></h2>
+        <p class="ayuda">Cada tipo tiene su capacidad, sus costos y su hora de salida. El programa decide qué tipo usa en cada ruta (la carga pesada al vehículo grande, la liviana al chico si sale más barato). Si solo tienes un tipo de vehículo, deja uno solo.</p>
+        <div id="tipos-lista"></div>
+        <div class="acciones"><button id="btn-agregar-tipo">+ Agregar tipo de vehículo</button></div>
+        <label class="chk" style="margin-top:6px"><input type="checkbox" data-k="flota.retorno"> Los vehículos regresan al depósito al terminar</label>
+        <div style="max-width:200px;margin-top:8px"><label for="moneda">Moneda (símbolo)</label><input id="moneda" data-k="moneda" maxlength="6"></div>
+      </div>
+
+      <div class="card">
+        <h2>Equilibrar la jornada de los conductores</h2>
+        <label for="equilibrio">Equilibrar jornadas</label>
+        <select id="equilibrio" data-k="equilibrio">
+          <option value="0">No (solo menor costo)</option>
+          <option value="0.25">Algo</option>
+          <option value="0.6">Bastante</option>
+          <option value="1">Mucho</option>
+        </select>
+        <p class="ayuda">Con “algo / bastante / mucho” el programa acepta gastar un poco más para que ningún conductor trabaje mucho menos que otro. El costo que ves siempre es el real; en Resultados se muestra cuánto cuesta equilibrar (aprox.).</p>
+      </div>
+
+      <div class="card">
+        <h2>Cómo se calculan las distancias y tiempos <small class="suave">(supuestos ajustables)</small></h2>
+        <div class="grid">
+          <div><label for="e-circ">Factor de circuidad <span class="ayuda">(km por calle ≈ recta × factor)</span></label><input id="e-circ" type="number" min="1" max="3" step="0.05" data-k="est.circuidad"></div>
+          <div><label for="e-vel">Velocidad media sin tráfico (km/h)</label><input id="e-vel" type="number" min="5" max="120" step="1" data-k="est.velocidad"></div>
+        </div>
+        <p class="ayuda">Solo se usan cuando no hay calles reales (sin internet o casilla desactivada). Son supuestos genéricos: ajústalos con tus propias mediciones.</p>
+      </div>
+    </div>
+
+    <!-- ---- 3. PEAJES ---- -->
+    <div class="pane" id="pane-peajes" role="tabpanel" aria-labelledby="tab-peajes" hidden>
+      <div class="card">
+        <h2>Objetivo y peajes</h2>
+        <div class="grid dos">
+          <div>
+            <label for="objetivo">¿Qué quieres minimizar?</label>
+            <select id="objetivo" data-k="objetivo">
+              <option value="costo">Menor costo total (recomendado)</option>
+              <option value="distancia">Menos kilómetros</option>
+              <option value="tiempo">Menos tiempo</option>
+            </select>
+          </div>
+          <div>
+            <label for="peso-peaje">¿Cuánto quieres evitar los peajes?</label>
+            <select id="peso-peaje" data-k="peso_peaje">
+              <option value="1">Normal: solo cuenta lo que cuestan (1)</option>
+              <option value="2">Evitar un poco: un desvío vale hasta 2 veces el peaje (2)</option>
+              <option value="5">Evitar mucho: un desvío vale hasta 5 veces el peaje (5)</option>
+            </select>
+          </div>
+        </div>
+        <p class="ayuda">“Evitar peajes” solo cambia la decisión del programa; el costo que se muestra siempre es el real.</p>
+      </div>
+      <div class="card">
+        <h2>Peajes en tus rutas <span class="etiqueta-ej" data-ej hidden>EJEMPLO – editar</span></h2>
+        <p class="ayuda">Escribe tú el nombre, la ubicación y la tarifa. La aplicación no trae tarifas. Para ubicar uno en el mapa elige “Agregar peaje” arriba del mapa y haz clic sobre la vía, o búscalo por dirección.</p>
+        <div class="acciones"><button id="btn-agregar-peaje">+ Agregar peaje</button><button id="btn-quitar-peajes" class="peligro">Quitar todos</button></div>
+        <div class="tabla-scroll">
+          <table id="tabla-peajes">
+            <thead><tr><th scope="col">ID</th><th scope="col">Nombre</th><th scope="col">Latitud</th><th scope="col">Longitud</th><th scope="col">Costo (<span class="mon">S/</span>)</th><th scope="col" title="Distancia máxima a la ruta para contar el peaje">Radio (m)</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="ayuda">Radio: si la ruta pasa a menos de esa distancia del punto, se cuenta el peaje. Con calles reales, el plan se verifica contra la ruta real y se recalcula (hasta 2 veces) con los peajes verdaderos; sin ellas se usa la línea recta, que es aproximada.</p>
+      </div>
+    </div>
+
+    <!-- ---- 4. TRÁFICO ---- -->
+    <div class="pane" id="pane-trafico" role="tabpanel" aria-labelledby="tab-trafico" hidden>
+      <div class="card">
+        <h2>Tráfico por hora del día</h2>
+        <div class="msg info">Esta aplicación <b>no usa tráfico en vivo</b>. El tráfico es un perfil que tú defines: el factor indica cuánto más tarda un trayecto a esa hora (1.0 = fluido, 1.5 = tarda 50 % más). Calíbralo con tus propias mediciones, por ejemplo comparando el tiempo real de tus conductores a distintas horas.</div>
+        <div class="acciones">
+          <button id="btn-traf-ninguno">Sin tráfico</button>
+          <button id="btn-traf-lima">Lima típico (supuesto genérico, ajústalo)</button>
+        </div>
+        <div class="barras" id="traf-barras" role="group" aria-label="Gráfico de factor de tráfico por hora. Arrastra para cambiar; también puedes escribir los valores abajo."></div>
+        <div class="horas" id="traf-horas"></div>
+        <p class="ayuda">Arrastra sobre las barras o escribe los valores (entre 1.0 y 3.0). Cada hora va de la hora indicada hasta la siguiente.</p>
+      </div>
+    </div>
+
+    <!-- ---- 5. RESULTADOS ---- -->
+    <div class="pane" id="pane-res" role="tabpanel" aria-labelledby="tab-res" hidden>
+      <div id="res-contenido"></div>
+      <div class="card" id="card-barrido">
+        <h2>Mejor hora de salida (comparar escenarios)</h2>
+        <p class="ayuda">Vuelve a optimizar con distintas horas de salida y compara el costo (usa tu perfil de tráfico y tus ventanas horarias). En esta comparación todos los vehículos de salida fija salen a la misma hora probada; los de salida automática siguen eligiendo la suya.</p>
+        <div class="grid">
+          <div><label for="b-desde">Desde</label><input id="b-desde" type="time" data-k="barrido.desde"></div>
+          <div><label for="b-hasta">Hasta</label><input id="b-hasta" type="time" data-k="barrido.hasta"></div>
+          <div><label for="b-paso">Cada (min)</label><input id="b-paso" type="number" min="5" step="5" data-k="barrido.paso"></div>
+        </div>
+        <div class="acciones"><button id="btn-barrido" class="primario">Buscar mejor hora de salida</button></div>
+        <div class="progreso" id="prog-barrido" hidden><i></i></div>
+        <div id="barrido-res" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <!-- ---- 6. FLETE ---- -->
+    <div class="pane" id="pane-flete" role="tabpanel" aria-labelledby="tab-flete" hidden>
+      <div class="card">
+        <h2>Flete a cobrar</h2>
+        <p class="ayuda">Convierte el costo de cada ruta en un precio para tus clientes. El precio depende por completo de los costos que ingresaste en “Flota y costos” y “Peajes”: si esos costos no son reales, el flete tampoco lo será.</p>
+        <div class="grid">
+          <div>
+            <label for="t-tipo">Cómo se aplica el porcentaje</label>
+            <select id="t-tipo" data-k="tarifa.tipo_margen">
+              <option value="markup">Markup (sobre el costo)</option>
+              <option value="margen">Margen (sobre el precio)</option>
+            </select>
+          </div>
+          <div><label for="t-pct">Porcentaje (%) <span class="etiqueta-ej">EJEMPLO</span></label><input id="t-pct" type="number" min="0" step="any" data-k="tarifa.pct"></div>
+          <div><label for="t-igv">IGV (%) <span class="ayuda">0 = no mostrar IGV. 18 % (vigente en Perú a la fecha de esta versión; verifica)</span></label><input id="t-igv" type="number" min="0" step="any" data-k="tarifa.igv_pct"></div>
+          <div><label for="t-min">Flete mínimo por parada (<span class="mon">S/</span>, sin IGV)</label><input id="t-min" type="number" min="0" step="any" data-k="tarifa.minimo"></div>
+          <div><label for="t-red">Redondear hacia arriba a múltiplos de <span class="ayuda">(0 = no)</span></label><input id="t-red" type="number" min="0" step="any" data-k="tarifa.redondeo"></div>
+        </div>
+        <div style="margin-top:8px">
+          <label for="t-base">Cómo se reparte el costo de cada ruta entre sus clientes</label>
+          <select id="t-base" data-k="tarifa.base">
+            <option value="mixto">Mixto (recomendado): mitad por desvío, mitad por carga × distancia</option>
+            <option value="desvio">Por desvío: cuánto alarga la ruta cada cliente</option>
+            <option value="peso">Por carga × distancia (tonelada-km desde el depósito)</option>
+            <option value="igual">Partes iguales entre los clientes del mismo vehículo</option>
+          </select>
+        </div>
+        <p class="ayuda">Markup: precio = costo × (1 + %). Margen: precio = costo ÷ (1 − %). Ejemplo: con 45 % de markup ganas el 45 % del costo, que equivale a cerca del 31 % del precio.</p>
+        <p class="msg aviso" id="nota-margen"><span class="etiqueta-ej">EJEMPLO</span> 45 % es un valor de ejemplo – cámbialo por tu propio margen. No es una tarifa oficial.</p>
+        <div class="acciones"><button id="btn-flete-calc" class="primario">Calcular flete</button></div>
+      </div>
+      <div id="flete-contenido"></div>
+    </div>
+
+    <!-- ---- Barra inferior: optimizar ---- -->
+    <div class="barra-opt">
+      <div class="msgs" id="msgs" role="alert" aria-live="assertive"></div>
+      <div class="fila">
+        <label class="chk" style="font-weight:500;flex:1 1 230px"><input type="checkbox" id="chk-osrm" data-k="calles"> <span>Calles reales <span class="ayuda">(OSRM, requiere internet)</span></span></label>
+        <div style="flex:0 0 190px">
+          <label for="tiempo-calc">Tiempo de cálculo</label>
+          <select id="tiempo-calc" data-k="tiempo">
+            <option value="rapido">Rápido (1 s)</option>
+            <option value="normal">Normal (3 s)</option>
+            <option value="profundo">Profundo (10 s)</option>
+          </select>
+        </div>
+      </div>
+      <p class="ayuda privacidad" id="priv-calles"><b>Privacidad:</b> con «Calles reales» marcada, las coordenadas del depósito y de las paradas (sin nombres) se envían a los servicios públicos de OpenStreetMap (OSRM). Si la desmarcas, no se envía nada de tus paradas; las imágenes del mapa igual se piden a OpenStreetMap.</p>
+      <details class="ayuda" id="nota-osrm"><summary>Aviso de uso justo del servidor público de calles</summary>Se usa el servidor público gratuito de OSRM (router.project-osrm.org): es de uso justo, sin garantía y con límites; no lo uses para cientos de consultas seguidas (se espera ~1 s entre consultas). Solo se envían coordenadas (sin nombres). Los tiempos de OSRM son a flujo libre; el tráfico lo aplica tu perfil. Con más de 100 puntos la tabla se pide por bloques (más lento). Si falla la conexión, se usa la estimación en línea recta (se avisa) y todo sigue funcionando.</details>
+      <div class="fila" style="margin-top:8px">
+        <button id="btn-optimizar" class="primario grande">Optimizar rutas</button>
+        <button id="btn-cancelar" type="button" hidden title="Detiene las consultas de calles reales en curso (no interrumpe el cálculo de rutas ya iniciado)">Cancelar</button>
+      </div>
+      <div class="progreso" id="prog"><i></i></div>
+      <div id="estado-calc" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- ============ MAPA ============ -->
+  <aside class="mapa-col" aria-label="Mapa">
+    <div class="map-tools">
+      <b style="font-size:.9rem">Clic en el mapa:</b>
+      <div class="seg" role="radiogroup" aria-label="Qué hace un clic en el mapa">
+        <label><input type="radio" name="modo-mapa" value="parada" checked> Agregar parada</label>
+        <label><input type="radio" name="modo-mapa" value="deposito"> Ubicar depósito</label>
+        <label><input type="radio" name="modo-mapa" value="peaje"> Agregar peaje</label>
+        <label><input type="radio" name="modo-mapa" value="nada"> Nada (solo mirar)</label>
+      </div>
+    </div>
+    <div id="mapa" role="application" aria-label="Mapa interactivo de rutas"></div>
+    <div class="leyenda">
+      <span><span class="mk mk-dep">D</span> Depósito</span>
+      <span><span class="mk mk-parada" style="--c:#1f77b4">1</span> Parada (número = orden en la ruta)</span>
+      <span><span class="mk mk-peaje"><b>P</b></span> Peaje</span>
+      <span id="leyenda-lineas">Líneas continuas = calles reales; discontinuas = línea recta (aprox.)</span>
+    </div>
+    <div id="aviso-teselas" class="msg aviso" hidden>Sin mapa de fondo (¿sin internet?). Los puntos y las rutas se ven igual sobre fondo liso.</div>
+  </aside>
+</div>
+
+<div id="hojas" aria-hidden="true"></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="lib/leaflet.js"></script>
+<script src="motor.js"></script>
+<script src="app.js"></script>
+
+<footer class="aviso-privacidad" role="contentinfo">
+<style>
+.aviso-privacidad{max-width:1200px;margin:48px auto 0;padding:24px 16px 32px;color:#eeeeee;font:400 13px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:.02em;border-top:1px solid #64754b}
+.aviso-privacidad p{margin:0 0 8px}.aviso-privacidad a{color:#ffffff;text-decoration:underline}
+@media (max-width:800px){.aviso-privacidad{padding-bottom:230px}}
+@media print{.aviso-privacidad{display:none}}
+</style>
+<p><strong>Privacidad.</strong> No hay servidor ni cuenta: tus paradas, costos y flota se guardan solo en este dispositivo (navegador). Si usas la búsqueda de direcciones o las calles reales, las direcciones y coordenadas se envían a los servicios públicos de OpenStreetMap (Nominatim y OSRM), y el mapa descarga sus teselas de OpenStreetMap.</p>
+<p><strong>Alcance.</strong> Los resultados son orientativos: no usa tráfico en vivo, las tarifas de peaje y los costos los ingresas tú, y el flete es un borrador de cálculo, no un comprobante de pago ni una tarifa oficial.</p>
+<p>Mapa © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">colaboradores de OpenStreetMap</a> · <a href="https://leafletjs.com" target="_blank" rel="noopener noreferrer">Leaflet</a></p>
+</footer>
+<script src="registro-sw.js"></script>
+</body>
+</html>
