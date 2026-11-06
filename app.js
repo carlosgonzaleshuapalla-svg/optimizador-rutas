@@ -155,7 +155,9 @@
       version: ESTADO_VERSION, esEjemplo: false, moneda: 'S/', sigC: 1, sigP: 1, sigT: 2, csvSep: ',',
       deposito: { nombre: 'Depósito', lat: '', lon: '' },
       paradas: [], peajes: [],
-      flota: { tipos: [t], retorno: true },
+      fin: 'deposito',                                        // 'deposito' | 'otro' | 'ultima'
+      depositoFinal: { nombre: 'Depósito final', lat: '', lon: '' },
+      flota: { tipos: [t] },
       est: { circuidad: '1.35', velocidad: '35' },
       equilibrio: '0',
       objetivo: 'costo', peso_peaje: '1', calles: true, tiempo: 'normal', actual: '',
@@ -242,7 +244,12 @@
       e.flota.tipos = [normalizarTipo(t1, 0, vt)];
     }
     e.sigT = Math.max(maxSuf(e.flota.tipos, 'T'), e.flota.tipos.length + 1);
-    if (F.retorno === false) e.flota.retorno = false;
+    // punto final de la ruta: proyectos anteriores guardaban solo flota.retorno (false = termina en la última parada)
+    e.fin = (o.fin === 'otro' || o.fin === 'ultima' || o.fin === 'deposito') ? o.fin : (F.retorno === false ? 'ultima' : 'deposito');
+    if (o.depositoFinal && typeof o.depositoFinal === 'object') {
+      e.depositoFinal.nombre = S(o.depositoFinal.nombre).slice(0, 80) || 'Depósito final';
+      e.depositoFinal.lat = S(o.depositoFinal.lat); e.depositoFinal.lon = S(o.depositoFinal.lon);
+    }
     ['circuidad', 'velocidad'].forEach(function (k) { if (o.est && o.est[k] != null) e.est[k] = S(o.est[k]); });
     if (['0', '0.25', '0.6', '1'].indexOf(S(o.equilibrio)) >= 0) e.equilibrio = S(o.equilibrio);
     if (['costo', 'distancia', 'tiempo'].indexOf(o.objetivo) >= 0) e.objetivo = o.objetivo;
@@ -339,6 +346,7 @@
     if (ultimo && !ultimo.obsoleto) {
       ultimo.obsoleto = true;
       var st = $('#stale'); if (st) st.hidden = false;
+      actualizarResumenMapa();
       o.mapa = true;
     }
     guardarLocalDeb();
@@ -359,6 +367,16 @@
     $('#banner-ej2').hidden = !estado.esEjemplo;
     $('#nota-osrm').hidden = !estado.calles;
     renderParadas(); renderPeajes(); renderTipos(); renderTrafico(); actualizarContadores();
+    aplicarFinUI();
+  }
+  // Selector «dónde termina cada ruta»: marca la opción, muestra el bloque del depósito final y lo que depende de él
+  function aplicarFinUI() {
+    var otro = estado.fin === 'otro';
+    $$('input[name="fin"]').forEach(function (r) { r.checked = r.value === estado.fin; r.closest('.opcion-fin').classList.toggle('sel', r.checked); });
+    $('#bloque-fin').hidden = !otro;
+    $('#lbl-modo-fin').hidden = !otro;
+    $('#ley-fin').hidden = !otro;
+    if (!otro && modoClic === 'fin') setModo('parada');
   }
 
   function actualizarContadores() {
@@ -547,7 +565,7 @@
   }
   function parsearTabla(texto) {
     texto = String(texto || '').replace(/^﻿/, '');
-    var avisos = [], res = { paradas: [], deposito: null, pendientes: [], avisos: avisos };
+    var avisos = [], res = { paradas: [], deposito: null, depositoFinal: null, pendientes: [], avisos: avisos };
     if (!texto.trim()) { avisos.push('No hay datos para importar.'); return res; }
     var filas = leerFilas(texto, detectarDelim(texto));
     if (!filas.length) { avisos.push('No hay datos para importar.'); return res; }
@@ -591,6 +609,7 @@
         avisos.push('Se omitió ' + et + ': latitud/longitud no válidas.'); return;
       }
       var nombre = cel(f, 'nombre');
+      if (normClave(nombre) === 'deposito_final') { res.depositoFinal = { nombre: (cel(f, 'dir') || 'Depósito final').slice(0, 80), lat: String(lat), lon: String(lon) }; return; }
       if (normClave(nombre) === 'deposito') { res.deposito = { nombre: 'Depósito', lat: String(lat), lon: String(lon) }; return; }
       var dem = num(cel(f, 'demanda'), NaN), srv = num(cel(f, 'servicio'), NaN);
       res.paradas.push({
@@ -599,13 +618,13 @@
         ini: normHora(cel(f, 'ini'), avisos, et), fin: normHora(cel(f, 'fin'), avisos, et)
       });
     });
-    if (!res.paradas.length && !res.deposito) avisos.push('No se encontró ninguna parada válida. Revisa que haya columnas de latitud y longitud (o de dirección).');
+    if (!res.paradas.length && !res.deposito && !res.depositoFinal) avisos.push('No se encontró ninguna parada válida. Revisa que haya columnas de latitud y longitud (o de dirección).');
     return res;
   }
   function importarTexto(texto, origen) {
     var r = parsearTabla(texto);
     var msgs = r.avisos.slice();
-    if (!r.paradas.length && !r.deposito && !r.pendientes.length) { mostrarMensajes([], msgs, 'No se importó nada.'); return; }
+    if (!r.paradas.length && !r.deposito && !r.depositoFinal && !r.pendientes.length) { mostrarMensajes([], msgs, 'No se importó nada.'); return; }
     var modo = ($('input[name="modo-imp"]:checked') || {}).value || 'reemplazar';
     if (modo === 'reemplazar') {
       if (estado.esEjemplo) {
@@ -617,6 +636,10 @@
       estado.paradas = []; estado.sigC = 1; geoCands = Object.create(null);
     }
     if (r.deposito) { estado.deposito.nombre = r.deposito.nombre; estado.deposito.lat = r.deposito.lat; estado.deposito.lon = r.deposito.lon; }
+    if (r.depositoFinal) {   // fila DEPOSITO_FINAL: el archivo trae un depósito final distinto; se carga y la ruta termina ahí
+      estado.depositoFinal.nombre = r.depositoFinal.nombre; estado.depositoFinal.lat = r.depositoFinal.lat; estado.depositoFinal.lon = r.depositoFinal.lon;
+      estado.fin = 'otro'; msgs.push('El archivo trae un depósito final (“' + r.depositoFinal.nombre + '”): se cargó y cada ruta termina allí. Cambia la opción “Dónde termina cada ruta” si no es lo que quieres.');
+    }
     var cupo = Math.max(0, MAX_PARADAS - estado.paradas.length), antes = r.paradas.length + r.pendientes.length;
     if (antes > cupo) {
       r.paradas = r.paradas.slice(0, cupo);
@@ -628,7 +651,7 @@
     dibujarMapa(true);
     mostrarMensajes([], msgs, null);
     if (r.pendientes.length) { geocodificarLista(r.pendientes); return; }
-    toast('Importadas ' + r.paradas.length + ' paradas' + (r.deposito ? ' y el depósito' : '') + ' (' + origen + ').' + (!isFinite(num(estado.deposito.lat, NaN)) ? ' Falta ubicar el depósito.' : ''));
+    toast('Importadas ' + r.paradas.length + ' paradas' + (r.deposito ? ' y el depósito' : '') + (r.depositoFinal ? ' y el depósito final' : '') + ' (' + origen + ').' + (!isFinite(num(estado.deposito.lat, NaN)) ? ' Falta ubicar el depósito.' : ''));
   }
   function csvCelda(v, sep) {
     var s = String(v == null ? '' : v);
@@ -648,6 +671,10 @@
     if (estado.esEjemplo) L.push(filaCsv(['EJEMPLO - datos ficticios', '', '', '', '', '', '', ''], sep));
     var d = estado.deposito;
     L.push(filaCsv(['DEPOSITO', d.lat, d.lon, '', '', '', '', ''].map(function (v, i) { return i === 0 ? v : (sep === ';' ? String(v).replace('.', ',') : v); }), sep));
+    if (estado.fin === 'otro') {   // depósito final: el nombre va en «direccion» para poder reimportarlo
+      var df = estado.depositoFinal;
+      L.push(filaCsv(['DEPOSITO_FINAL', df.lat, df.lon, '', '', '', '', df.nombre || ''].map(function (v, i) { return (i === 1 || i === 2) && sep === ';' ? String(v).replace('.', ',') : v; }), sep));
+    }
     estado.paradas.forEach(function (p) {
       L.push(filaCsv([p.nombre, p.lat, p.lon, p.demanda, p.servicio, p.ini, p.fin, p.dir || ''].map(function (v, i) { return (i >= 1 && i <= 4 && sep === ';') ? String(v).replace('.', ',') : v; }), sep));
     });
@@ -669,7 +696,9 @@
         var p = mp.get(s.id) || {};
         L.push(filaCsv([nv, tp, i + 1, s.id, s.nombre, numCsv(p.lat, 6, sep), numCsv(p.lon, 6, sep), numCsv(p.demanda, 2, sep), min2hhmm(s.llegada_min), numCsv(s.espera_min, 1, sep), min2hhmm(s.inicio_servicio_min), min2hhmm(s.salida_min), numCsv(s.km_tramo, 2, sep), numCsv(s.min_tramo, 1, sep), numCsv(s.peaje_tramo, 2, sep), ''], sep));
       });
-      if (pr.retorno_deposito !== false) L.push(filaCsv([nv, tp, r.paradas.length + 1, 'DEP', pr.deposito.nombre, '', '', '', min2hhmm(r.regreso_min), '', '', '', '', '', '', ''], sep));
+      var ff = finDe(pr);
+      if (ff === 'deposito') L.push(filaCsv([nv, tp, r.paradas.length + 1, 'DEP', pr.deposito.nombre, '', '', '', min2hhmm(r.regreso_min), '', '', '', '', '', '', ''], sep));
+      else if (ff === 'otro' && pr.deposito_final) L.push(filaCsv([nv, tp, r.paradas.length + 1, 'FIN', pr.deposito_final.nombre, numCsv(pr.deposito_final.lat, 6, sep), numCsv(pr.deposito_final.lon, 6, sep), '', min2hhmm(r.regreso_min), '', '', '', '', '', '', ''], sep));
     });
     ultimo.resultado.no_atendidas.forEach(function (n) {
       var p = mp.get(n.id) || {};
@@ -751,6 +780,12 @@
       cambio();
       toast('Depósito ubicado.');
       setModo('parada');
+    } else if (modoClic === 'fin') {
+      estado.depositoFinal.lat = String(lat); estado.depositoFinal.lon = String(lon);
+      $('#fin-lat').value = estado.depositoFinal.lat; $('#fin-lon').value = estado.depositoFinal.lon;
+      cambio();
+      toast('Depósito final ubicado.');
+      setModo('parada');
     } else if (modoClic === 'peaje') {
       var pid = 'P' + (estado.sigP++);
       estado.peajes.push({ id: pid, nombre: 'Peaje ' + pid, lat: String(lat), lon: String(lon), costo: '', radio: '300' });
@@ -776,7 +811,8 @@
         var col = COLORES[k % COLORES.length], nv = nombreVeh(r);
         var seq = [dep];
         r.paradas.forEach(function (s) { var p = mp.get(s.id); if (p) seq.push([p.lat, p.lon]); });
-        if (pr.retorno_deposito !== false) seq.push(dep);
+        if (finDe(pr) === 'deposito') seq.push(dep);
+        else if (finDe(pr) === 'otro' && pr.deposito_final) seq.push([pr.deposito_final.lat, pr.deposito_final.lon]);
         var legs = vista.legs && vista.legs[k];
         for (var t = 0; t < seq.length - 1; t++) {
           var geom = legs && legs[t] && legs[t].geom;
@@ -800,19 +836,38 @@
           .bindPopup(popupHtml(p.nombre, ['NO ATENDIDA', n.motivo])).addTo(capaMarc);
       });
       L.marker(dep, { icon: icono('mk-dep', 'D', '', 30), title: pr.deposito.nombre, zIndexOffset: 500 })
-        .bindPopup(popupHtml(pr.deposito.nombre, ['Depósito'])).addTo(capaMarc);
+        .bindPopup(popupHtml(pr.deposito.nombre, ['Depósito de salida'])).addTo(capaMarc);
+      if (finDe(pr) === 'otro' && pr.deposito_final) {
+        pts.push([pr.deposito_final.lat, pr.deposito_final.lon]);
+        L.marker([pr.deposito_final.lat, pr.deposito_final.lon], { icon: icono('mk-fin', 'F', '', 30), title: pr.deposito_final.nombre, zIndexOffset: 450 })
+          .bindPopup(popupHtml(pr.deposito_final.nombre, ['Depósito final (las rutas terminan aquí)'])).addTo(capaMarc);
+      }
     } else {
       var dlat = num(estado.deposito.lat, NaN), dlon = num(estado.deposito.lon, NaN);
       if (isFinite(dlat) && isFinite(dlon)) {
         pts.push([dlat, dlon]);
         L.marker([dlat, dlon], { icon: icono('mk-dep', 'D', '', 30), draggable: true, title: estado.deposito.nombre, zIndexOffset: 500 })
-          .bindPopup(popupHtml(estado.deposito.nombre || 'Depósito', ['Arrástralo para moverlo']))
+          .bindPopup(popupHtml(estado.deposito.nombre || 'Depósito', ['Depósito de salida', 'Arrástralo para moverlo']))
           .on('dragend', function (ev) {
             var ll = ev.target.getLatLng();
             estado.deposito.lat = String(r6(ll.lat)); estado.deposito.lon = String(r6(ll.lng));
             $('#dep-lat').value = estado.deposito.lat; $('#dep-lon').value = estado.deposito.lon;
             cambio();
           }).addTo(capaMarc);
+      }
+      if (estado.fin === 'otro') {
+        var fla = num(estado.depositoFinal.lat, NaN), flo = num(estado.depositoFinal.lon, NaN);
+        if (isFinite(fla) && isFinite(flo)) {
+          pts.push([fla, flo]);
+          L.marker([fla, flo], { icon: icono('mk-fin', 'F', '', 30), draggable: true, title: estado.depositoFinal.nombre, zIndexOffset: 450 })
+            .bindPopup(popupHtml(estado.depositoFinal.nombre || 'Depósito final', ['Depósito final', 'Arrástralo para moverlo']))
+            .on('dragend', function (ev) {
+              var ll = ev.target.getLatLng();
+              estado.depositoFinal.lat = String(r6(ll.lat)); estado.depositoFinal.lon = String(r6(ll.lng));
+              $('#fin-lat').value = estado.depositoFinal.lat; $('#fin-lon').value = estado.depositoFinal.lon;
+              cambio();
+            }).addTo(capaMarc);
+        }
       }
       estado.paradas.forEach(function (p, i) {
         var la = num(p.lat, NaN), lo = num(p.lon, NaN);
@@ -908,7 +963,7 @@
       }),
       flota: { tipos: tipos },
       salida_min: primeraFija ? primeraFija.salida_min : 480,
-      retorno_deposito: E.flota.retorno !== false,
+      fin: E.fin,
       trafico: { perfil: E.perfil.slice() },
       peajes: E.peajes.filter(function (p) { return isFinite(num(p.lat, NaN)) && isFinite(num(p.lon, NaN)); }).map(function (p) {
         return { id: p.id, nombre: p.nombre || p.id, lat: num(p.lat, 0), lon: num(p.lon, 0), costo: num(p.costo, 0), radio_m: num(p.radio, 300) };
@@ -918,11 +973,33 @@
       equilibrio: clamp(num(E.equilibrio, 0), 0, 1),
       estimacion: { circuidad: clamp(num(E.est.circuidad, 1.35), 1, 3), velocidad_kmh: clamp(num(E.est.velocidad, 35), 5, 120) }
     };
+    // compatibilidad: el motor 1.1 solo conoce retorno_deposito; el 1.2 usa fin (y deposito_final cuando es «otro»)
+    if (E.fin === 'ultima') problema.retorno_deposito = false;
+    else if (E.fin === 'deposito') problema.retorno_deposito = true;
+    if (E.fin === 'otro') problema.deposito_final = { id: 'FIN', nombre: E.depositoFinal.nombre || 'Depósito final', lat: num(E.depositoFinal.lat, NaN), lon: num(E.depositoFinal.lon, NaN) };
     return problema;
   }
+  function motorVer() { var m = /^(\d+)\.(\d+)/.exec(String((Motor && Motor.VERSION) || '')); return m ? [+m[1], +m[2]] : [0, 0]; }
+  // Textos según dónde termina la ruta (todo lo que venga del usuario se escapa al armar el HTML)
+  function nomFin(pr) { return (pr.deposito_final && pr.deposito_final.nombre) || 'Depósito final'; }
+  function txtFin(pr) {
+    var f = finDe(pr);
+    if (f === 'otro') return { f: f, fila: 'Llega al depósito final: ' + nomFin(pr), corto: 'llegada al depósito final', largo: 'Llegada estimada al depósito final (' + nomFin(pr) + ')' };
+    if (f === 'ultima') return { f: f, fila: '', corto: 'fin en la última parada', largo: 'Fin estimado de la ruta (en la última parada)' };
+    return { f: f, fila: 'Regresa al depósito', corto: 'regreso', largo: 'Regreso estimado' };
+  }
+  function esMotor12() { var v = motorVer(); return v[0] > 1 || (v[0] === 1 && v[1] >= 2); }
+  function finDe(pr) { return pr.fin === 'otro' || pr.fin === 'ultima' ? pr.fin : (pr.retorno_deposito === false ? 'ultima' : 'deposito'); }
   function validarTodo(pr) {
     var errores = [], avisos = [], E = estado;
     if (!isFinite(pr.deposito.lat) || !isFinite(pr.deposito.lon)) errores.push('Falta ubicar el depósito: busca su dirección, escribe su latitud y longitud, o elige “Ubicar depósito” sobre el mapa y haz clic.');
+    if (E.fin === 'otro') {
+      var fl = pr.deposito_final.lat, fo = pr.deposito_final.lon;
+      if (!isFinite(fl) || !isFinite(fo)) errores.push('Falta ubicar el depósito final: busca su dirección, escribe su latitud y longitud, o usa “Ubicar con un clic en el mapa” en “Datos”.');
+      else if (Math.abs(fl) > 90 || Math.abs(fo) > 180) errores.push('El depósito final tiene coordenadas fuera de rango.');
+      else if (isFinite(pr.deposito.lat) && Math.abs(fl - pr.deposito.lat) < 1e-6 && Math.abs(fo - pr.deposito.lon) < 1e-6) avisos.push('El depósito final está en el mismo punto que el de salida: es lo mismo que “Regresa al mismo depósito”.');
+      if (!esMotor12()) errores.push('Esta copia de motor.js (versión ' + ((Motor && Motor.VERSION) || '?') + ') no admite “Termina en otro depósito”. Actualiza motor.js a la versión 1.2 o elige otra opción.');
+    }
     if (!E.paradas.length) errores.push('Agrega al menos una parada (dirección, clic en el mapa, importar CSV o “Cargar ejemplo”).');
     E.paradas.forEach(function (p) {
       var la = num(p.lat, NaN), lo = num(p.lon, NaN), n = (p.nombre || p.id);
@@ -956,13 +1033,24 @@
     });
     if (tipos.length && tipos.every(function (t) { return t.capacidad > 0; }) && E.paradas.every(function (p) { return !(num(p.demanda, 0) > 0); })) avisos.push('Hay capacidad pero ninguna parada tiene demanda: la capacidad no limitará nada.');
     if (!esMotor11() && tipos.length > 1) avisos.push('Este motor (v' + ((Motor && Motor.VERSION) || '?') + ') solo admite un tipo de vehículo: se usa el primero (' + (tipos[0].nombre) + ') para todos.');
-    if (E.calles && E.paradas.length + 1 > MAX_PUNTOS_OSRM) avisos.push('Con más de ' + MAX_PUNTOS_OSRM + ' puntos las calles reales tardarían demasiado en el servidor público: se usará la estimación en línea recta.');
-    else if (E.calles && E.paradas.length + 1 > 100) avisos.push('Con más de 100 puntos las distancias por calles se piden al servidor público por bloques (una consulta por segundo): puede tardar uno o dos minutos.');
+    // mismo conteo que prepararMatriz (salida + paradas + depósito final si termina en otro depósito)
+    var nPuntos = puntosDe(pr).length;
+    if (E.calles && nPuntos > MAX_PUNTOS_OSRM) avisos.push('Con más de ' + MAX_PUNTOS_OSRM + ' puntos (' + nPuntos + ' contando el depósito de salida' + (E.fin === 'otro' ? ' y el final' : '') + ') las calles reales tardarían demasiado en el servidor público: se usará la estimación en línea recta.');
+    else if (E.calles && nPuntos > 100) avisos.push('Con más de 100 puntos (' + nPuntos + ') las distancias por calles se piden al servidor público por bloques (una consulta por segundo): puede tardar uno o dos minutos.');
+    // la parada «FIN» chocaría con el id interno del depósito final
+    if (E.fin === 'otro') E.paradas.forEach(function (p) {
+      if (String(p.id).trim().toUpperCase() === 'FIN') errores.push('La parada ' + p.id + ' (' + (p.nombre || p.id) + ') tiene el código “FIN”, que usa el depósito final. Cámbiale el código o el nombre (por ejemplo “P12”).');
+      else if (String(p.nombre || '').trim().toUpperCase() === 'FIN') avisos.push('La parada ' + p.id + ' se llama “FIN” y puede confundirse con el depósito final. Conviene renombrarla (por ejemplo “Cliente FIN”).');
+    });
     if (!errores.length && Motor) {
       try {
         var v = Motor.validar(paraMotor(pr));
         (v.errores || []).forEach(function (m) { if (errores.indexOf(m) < 0) errores.push(m); });
-        (v.avisos || []).forEach(function (m) { if (avisos.indexOf(m) < 0) avisos.push(m); });
+        (v.avisos || []).forEach(function (m) {
+          // «mismo punto que el de salida»: ya lo avisó la interfaz; el motor dice lo mismo con otras palabras (un solo aviso)
+          if (/mismas coordenadas que el de salida/.test(m) && avisos.some(function (a) { return /mismo punto que el de salida/.test(a); })) return;
+          if (avisos.indexOf(m) < 0) avisos.push(m);
+        });
       } catch (e) { avisos.push('No se pudo ejecutar la validación del motor: ' + e.message); }
     }
     return { ok: errores.length === 0, errores: errores, avisos: avisos };
@@ -1006,25 +1094,33 @@
     return fetchJson(url, ms, 'el servidor de calles');
   }
   function firmaPuntos(pr) {
-    return [pr.deposito].concat(pr.paradas).map(function (p) { return p.lat.toFixed(6) + ',' + p.lon.toFixed(6); }).join('|');
+    return puntosDe(pr).map(function (p) { return p.lat.toFixed(6) + ',' + p.lon.toFixed(6); }).join('|');
+  }
+  // Límites de bloque [0, ..., n]: hasta 100 puntos = 1 bloque; más = bloques parejos de ≤ BLOQUE_OSRM (mínimo 2 puntos cada uno)
+  function bordesBloques(n) {
+    var nb = n <= 100 ? 1 : Math.ceil(n / BLOQUE_OSRM), base = Math.floor(n / nb), extra = n % nb, b = [0], i;
+    for (i = 0; i < nb; i++) b.push(b[i] + base + (i < extra ? 1 : 0));
+    return b;
   }
   function coordsUrl(arr) { return arr.map(function (p) { return p.lon + ',' + p.lat; }).join(';'); }
 
   // Devuelve {km, min} (matrices (n+1)x(n+1)) o null (con aviso en `avisos`). Nunca lanza.
   // Hasta 100 puntos: una consulta. Más: por bloques de BLOQUE_OSRM x BLOQUE_OSRM (sources/destinations).
   async function prepararMatriz(pr, avisos, alEstado) {
-    var pts = [pr.deposito].concat(pr.paradas), n = pts.length;
+    var pts = puntosDe(pr), n = pts.length;
     if (n > MAX_PUNTOS_OSRM) { avisos.push('Hay ' + n + ' puntos y el servidor público de calles reales no está pensado para tantos (máximo ' + MAX_PUNTOS_OSRM + '): se usa la estimación en línea recta.'); return null; }
     var firma = firmaPuntos(pr);
     if (cacheMatriz && cacheMatriz.firma === firma) return cacheMatriz;
     var c = (pr.estimacion || {}).circuidad || 1.35, v = (pr.estimacion || {}).velocidad_kmh || 35, vacios = 0;
     var km = [], mi = [], i, k;
     for (i = 0; i < n; i++) { km.push(new Array(n).fill(null)); mi.push(new Array(n).fill(null)); }
-    var B = n <= 100 ? n : BLOQUE_OSRM, nb = Math.ceil(n / B), total = nb * nb, hecho = 0;
+    // Bloques de tamaño parejo (≤ BLOQUE_OSRM): así ninguno queda con 1 solo punto (la tabla de OSRM pide ≥ 2 coordenadas)
+    // y una consulta entre dos bloques nunca pasa de 2 × BLOQUE_OSRM = 100 coordenadas.
+    var bordes = bordesBloques(n), nb = bordes.length - 1, total = nb * nb, hecho = 0;
     try {
       for (var I = 0; I < nb; I++) {
         for (var J = 0; J < nb; J++) {
-          var i0 = I * B, i1 = Math.min(n, i0 + B), j0 = J * B, j1 = Math.min(n, j0 + B);
+          var i0 = bordes[I], i1 = bordes[I + 1], j0 = bordes[J], j1 = bordes[J + 1];
           var ci = pts.slice(i0, i1), cj = pts.slice(j0, j1), url;
           if (I === J) url = OSRM + '/table/v1/driving/' + coordsUrl(ci) + '?annotations=distance,duration';
           else {
@@ -1168,32 +1264,36 @@
 
   /* ===================== búsqueda de direcciones: pantalla ===================== */
   var geoOcupado = false;
-  function renderCandidatos(lista, q, objetivo) {
-    candActual = { lista: lista, objetivo: objetivo, q: q };
-    var box = $('#busq-res');
+  function renderCandidatos(lista, q, objetivo, dest) {
+    candActual = { lista: lista, objetivo: objetivo, q: q, dest: dest || null };
+    var box = $(dest === 'fin' ? '#fin-res' : '#busq-res'), otra = $(dest === 'fin' ? '#busq-res' : '#fin-res');
+    if (otra) otra.innerHTML = '';
     if (!lista.length) {
       box.innerHTML = '<div class="msg aviso">No se encontró “' + esc(q) + '”. Prueba con calle, número y distrito (ej.: Av. Larco 345, Miraflores), o ubícalo con clic en el mapa.</div>';
       return;
     }
     box.innerHTML = '<p class="ayuda">' + (objetivo ? 'Elige la dirección correcta para <b>' + esc(objetivo.id) + '</b>:' : 'Resultados (elige uno):') + '</p>' + lista.map(function (c, i) {
-      var botones = objetivo
+      var botones = dest === 'fin'
+        ? '<button class="mini primario" data-cand="fin" data-i="' + i + '">Usar como depósito final</button>'
+        : objetivo
         ? '<button class="mini primario" data-cand="usar" data-i="' + i + '">Usar para ' + esc(objetivo.id) + '</button>'
-        : '<button class="mini" data-cand="parada" data-i="' + i + '">Agregar como parada</button><button class="mini" data-cand="deposito" data-i="' + i + '">Como depósito</button><button class="mini" data-cand="peaje" data-i="' + i + '">Como peaje</button>';
+        : '<button class="mini" data-cand="parada" data-i="' + i + '">Agregar como parada</button><button class="mini" data-cand="deposito" data-i="' + i + '">Como depósito</button>' + (estado.fin === 'otro' ? '<button class="mini" data-cand="fin" data-i="' + i + '">Como depósito final</button>' : '') + '<button class="mini" data-cand="peaje" data-i="' + i + '">Como peaje</button>';
       return '<div class="cand"><div class="cand-t">' + esc(c.nombre) + '<br><small class="suave">' + esc(fmt(c.lat, 5)) + ', ' + esc(fmt(c.lon, 5)) + ' · © OpenStreetMap</small></div><div class="cand-b">' + botones + '<button class="mini" data-cand="ver" data-i="' + i + '">Ver en el mapa</button></div></div>';
     }).join('');
   }
   function msgErrorGeo(e) {
     return '<div class="msg aviso">No se pudo buscar la dirección (' + esc(e.message) + '). El resto de la aplicación sigue funcionando: ubica los puntos con clic en el mapa o con latitud y longitud.</div>';
   }
-  async function buscarDireccion() {
-    var q = $('#busq-q').value.trim();
+  async function buscarDireccion(dest) {
+    var esFin = dest === 'fin';
+    var q = $(esFin ? '#fin-q' : '#busq-q').value.trim();
     if (!q) { toast('Escribe una dirección para buscar.'); return; }
-    var btn = $('#btn-buscar'), box = $('#busq-res');
+    var btn = $(esFin ? '#btn-fin-buscar' : '#btn-buscar'), box = $(esFin ? '#fin-res' : '#busq-res');
     btn.disabled = true;
     box.innerHTML = '<p class="ayuda">Buscando…</p>';
     try {
       var r = await geoBuscar(q);
-      renderCandidatos(r.res, q, null);
+      renderCandidatos(r.res, q, null, esFin ? 'fin' : null);
     } catch (e) { box.innerHTML = msgErrorGeo(e); }
     finally { btn.disabled = false; }
   }
@@ -1218,6 +1318,11 @@
       $('#dep-nombre').value = estado.deposito.nombre; $('#dep-lat').value = estado.deposito.lat; $('#dep-lon').value = estado.deposito.lon;
       cambio(); toast('Depósito ubicado.');
       if (modoClic === 'deposito') setModo('parada');
+    } else if (accion === 'fin') {
+      estado.depositoFinal.nombre = nombreCorto(c.nombre); estado.depositoFinal.lat = String(c.lat); estado.depositoFinal.lon = String(c.lon);
+      $('#fin-nombre').value = estado.depositoFinal.nombre; $('#fin-lat').value = estado.depositoFinal.lat; $('#fin-lon').value = estado.depositoFinal.lon;
+      cambio(); toast('Depósito final ubicado.');
+      if (modoClic === 'fin') setModo('parada');
     } else if (accion === 'peaje') {
       var pid = 'P' + (estado.sigP++);
       estado.peajes.push({ id: pid, nombre: nombreCorto(c.nombre), lat: String(c.lat), lon: String(c.lon), costo: '', radio: '300' });
@@ -1370,11 +1475,14 @@
     pr.paradas.forEach(function (p, i) { m[p.id] = i + 1; });
     return m;
   }
-  function puntosDe(pr) { return [pr.deposito].concat(pr.paradas); }
+  // 0 = depósito de salida, 1..n = paradas, n+1 = depósito final (solo si fin = «otro»)
+  function puntosDe(pr) { var a = [pr.deposito].concat(pr.paradas); if (finDe(pr) === 'otro' && pr.deposito_final) a.push(pr.deposito_final); return a; }
   function indicesRuta(pr, r, mi) {
     var idx = [0];
     r.paradas.forEach(function (s) { if (mi[s.id] != null) idx.push(mi[s.id]); });
-    if (pr.retorno_deposito !== false) idx.push(0);
+    var f = finDe(pr);
+    if (f === 'deposito') idx.push(0);
+    else if (f === 'otro') idx.push(pr.paradas.length + 1);
     return idx;
   }
   function firmaPlan(res) {
@@ -1543,7 +1651,9 @@
     pr.paradas.forEach(function (p) { mp[p.id] = p; });
     var pts = [[pr.deposito.lat, pr.deposito.lon]];
     r.paradas.forEach(function (s) { if (mp[s.id]) pts.push([mp[s.id].lat, mp[s.id].lon]); });
-    if (pr.retorno_deposito !== false) pts.push([pr.deposito.lat, pr.deposito.lon]);
+    var fm = finDe(pr);
+    if (fm === 'deposito') pts.push([pr.deposito.lat, pr.deposito.lon]);
+    else if (fm === 'otro' && pr.deposito_final) pts.push([pr.deposito_final.lat, pr.deposito_final.lon]);
     var out = [], i = 0;
     while (i < pts.length - 1) {
       var fin = Math.min(i + 10, pts.length - 1);   // origen + 9 waypoints + destino
@@ -1570,9 +1680,9 @@
       sumKm += s.km_tramo || 0; sumPj += s.peaje_tramo || 0;
       h += '<tr><td>' + (i + 1) + '</td><td>' + esc(s.nombre) + ' <small class="suave">' + esc(s.id) + '</small></td><td>' + esc(ventanaTxt(p.ventana)) + '</td><td class="num">' + min2hhmm(s.llegada_min) + '</td><td class="num">' + (s.espera_min > 0.5 ? Math.round(s.espera_min) + ' min' : '—') + '</td><td class="num">' + min2hhmm(s.inicio_servicio_min) + '</td><td class="num">' + min2hhmm(s.salida_min) + '</td><td class="num">' + fmt(s.km_tramo, 1) + '</td><td class="num">' + (s.peaje_tramo > 0 ? fmt(s.peaje_tramo, 2) : '—') + '</td></tr>';
     });
-    if (pr.retorno_deposito !== false) {
+    if (finDe(pr) !== 'ultima') {
       var kmR = Math.max(0, (r.km || 0) - sumKm), pjR = Math.max(0, ((r.costo && r.costo.peajes) || 0) - sumPj);
-      h += '<tr class="extra"><td></td><td>Regresa al depósito</td><td></td><td class="num">' + min2hhmm(r.regreso_min) + '</td><td></td><td></td><td></td><td class="num">' + fmt(kmR, 1) + '</td><td class="num">' + (pjR > 0.005 ? fmt(pjR, 2) : '—') + '</td></tr>';
+      h += '<tr class="extra"><td></td><td>' + esc(txtFin(pr).fila) + '</td><td></td><td class="num">' + min2hhmm(r.regreso_min) + '</td><td></td><td></td><td></td><td class="num">' + fmt(kmR, 1) + '</td><td class="num">' + (pjR > 0.005 ? fmt(pjR, 2) : '—') + '</td></tr>';
     }
     return h + '</tbody></table></div>';
   }
@@ -1696,6 +1806,7 @@
   function renderResultados() {
     var cont = $('#res-contenido');
     if (!ultimo) {
+      actualizarResumenMapa();
       cont.innerHTML = '<div class="card vacio"><b>Aún no hay resultados.</b><br>Completa los datos y pulsa “Optimizar rutas”. Mientras tanto puedes buscar la mejor hora de salida más abajo.</div>';
       return;
     }
@@ -1757,7 +1868,7 @@
         if (typeof sd === 'number' && ((typeof tb.salida_desde_min === 'number' && Math.abs(sd - tb.salida_desde_min) < pasoB) || (typeof tb.salida_hasta_min === 'number' && Math.abs(sd - tb.salida_hasta_min) < pasoB))) h += avisoBorde(sd);
       }
       h += tablaRuta(r, pr);
-      h += '<p class="ayuda">Conducción ' + fmtDur(r.min_conduccion) + ' · espera ' + fmtDur(r.min_espera) + ' · atención ' + fmtDur(r.min_servicio) + ' · regreso ' + min2hhmm(r.regreso_min) + '</p>';
+      h += '<p class="ayuda">Conducción ' + fmtDur(r.min_conduccion) + ' · espera ' + fmtDur(r.min_espera) + ' · atención ' + fmtDur(r.min_servicio) + ' · ' + txtFin(pr).corto + ' ' + min2hhmm(r.regreso_min) + '</p>';
       h += desgloseCosto(r.costo);
       if (r.peajes && r.peajes.length) {
         h += '<p class="ayuda">Peajes planificados: ' + r.peajes.map(function (p) { return esc(p.nombre || p.id) + ' (' + money(p.costo) + ')'; }).join(', ') + '</p>';
@@ -1777,16 +1888,19 @@
       'Tráfico: ' + (esTraficoPlano() ? 'sin tráfico (todas las horas con factor 1.0).' : 'perfil por hora definido por ti (no es tráfico en vivo ni datos medidos por esta aplicación).'),
       U.usoOSRM ? 'Distancias y tiempos por calles reales de OSRM (a flujo libre; el tráfico lo aplica tu perfil).' + (pr.peajes.length ? ' Los peajes se calcularon primero en línea recta y luego se verificaron con la geometría real de cada tramo' + (U.refino ? '' : ' (en curso)') + '.' : '') : (estado.calles ? 'Las calles reales no estuvieron disponibles (revisa los avisos): se usó la estimación en línea recta.' : null),
       hayDir ? 'Las ubicaciones obtenidas a partir de direcciones vienen de OpenStreetMap (Nominatim, © colaboradores de OpenStreetMap) y pueden ser inexactas: confirma las marcadas en amarillo.' : null,
+      finDe(pr) === 'otro' ? 'Cada ruta termina en el depósito final «' + nomFin(pr) + '» (no regresa al de salida); el costo incluye ese último tramo.' : (finDe(pr) === 'ultima' ? 'Cada ruta termina en su última parada: no hay tramo de regreso y el costo no incluye volver al depósito.' : null),
       'Costos (por km, por hora, fijo) y tarifas de peaje: los escribiste tú; la aplicación no trae precios.',
       'Los tiempos de atención y las ventanas horarias son los de la tabla; si llegas antes de la ventana esperas.',
       'Resultado de una búsqueda heurística con tiempo limitado: no se garantiza que sea el óptimo absoluto en problemas grandes.'
     ];
     propios = propios.filter(Boolean);
+    if (sup.some(function (x) { return /^Cada ruta termina/.test(String(x)); })) propios = propios.filter(function (x) { return !/^Cada ruta termina/.test(x); });
     if (estado.esEjemplo) propios.unshift('Los datos son de EJEMPLO, ficticios.');
     h += '<div class="card supuestos"><h3>Supuestos de este cálculo</h3><ul>' + sup.concat(propios).map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>' +
       (res.avisos && res.avisos.length ? '<h3>Avisos del motor</h3><ul>' + res.avisos.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>' : '') +
       '<p class="ayuda">Motor v' + esc(Motor && Motor.VERSION || '?') + (res.semilla != null ? ' · semilla ' + esc(res.semilla) : '') + (res.iteraciones ? ' · ' + fmt(res.iteraciones, 0) + ' iteraciones' : '') + (res.ms ? ' · ' + fmt(res.ms, 0) + ' ms' : '') + '</p></div>';
     cont.innerHTML = h;
+    actualizarResumenMapa();
   }
   function esTraficoPlano() { return estado.perfil.every(function (v) { return v === 1; }); }
 
@@ -2003,13 +2117,13 @@
     $('#hojas').innerHTML = U.resultado.rutas.map(function (r) {
       var en = enlacesMaps(pr, r);
       return '<section class="hoja"><h2>Hoja de ruta — ' + esc(nombreVeh(r)) + (estado.esEjemplo ? ' <span class="etiqueta-ej">EJEMPLO – datos ficticios</span>' : '') + '</h2>' +
-        '<p>Fecha de impresión: ' + esc(hoy) + ' · Salida del depósito (' + esc(pr.deposito.nombre) + '): <b>' + esc(min2hhmm(r.salida_deposito_min)) + '</b> · Regreso estimado: <b>' + esc(min2hhmm(r.regreso_min)) + '</b><br>' +
+        '<p>Fecha de impresión: ' + esc(hoy) + ' · Salida del depósito (' + esc(pr.deposito.nombre) + '): <b>' + esc(min2hhmm(r.salida_deposito_min)) + '</b> · ' + esc(txtFin(pr).largo) + ': <b>' + esc(min2hhmm(r.regreso_min)) + '</b><br>' +
         r.paradas.length + ' paradas · ' + fmt(r.km, 1) + ' km · carga ' + fmt(r.carga, 0) + ' · Conductor: ______________________ · Placa: ____________</p>' +
         '<table><thead><tr><th>#</th><th>Cliente / parada</th><th>Llegada</th><th>Atención</th><th>Salida</th><th>Demanda</th><th>Ventana</th><th>Recibido (firma)</th></tr></thead><tbody>' +
         r.paradas.map(function (s, i) {
           var p = mp[s.id] || {};
           return '<tr><td>' + (i + 1) + '</td><td>' + esc(s.nombre) + '<br><small>' + esc(s.id) + ' · ' + (p.lat != null ? esc(p.lat.toFixed(5) + ', ' + p.lon.toFixed(5)) : '') + '</small></td><td>' + esc(min2hhmm(s.llegada_min)) + '</td><td>' + esc(min2hhmm(s.inicio_servicio_min)) + '</td><td>' + esc(min2hhmm(s.salida_min)) + '</td><td>' + fmt(p.demanda || 0, 0) + '</td><td>' + esc(ventanaTxt(p.ventana)) + '</td><td class="firma"></td></tr>';
-        }).join('') + '</tbody></table>' +
+        }).join('') + (finDe(pr) === 'otro' ? '<tr><td></td><td><b>' + esc(txtFin(pr).fila) + '</b><br><small>' + (pr.deposito_final ? esc(pr.deposito_final.lat.toFixed(5) + ', ' + pr.deposito_final.lon.toFixed(5)) : '') + '</small></td><td>' + esc(min2hhmm(r.regreso_min)) + '</td><td></td><td></td><td></td><td></td><td class="firma"></td></tr>' : '') + '</tbody></table>' +
         '<p><b>Navegación (Google Maps):</b></p>' + en.map(function (e, i) { return '<p><small>' + (en.length > 1 ? 'Tramo ' + (i + 1) + ': ' : '') + '<a href="' + esc(e.url) + '">' + esc(e.url) + '</a></small></p>'; }).join('') +
         '<p class="pie">Horas estimadas con el perfil de tráfico definido por el planificador (no es tráfico en vivo). Pueden variar en la calle.</p></section>';
     }).join('');
@@ -2040,6 +2154,148 @@
     return true;
   }
 
+  /* ===================== mapa: tamaño, ampliar y resumen superpuesto ===================== */
+  var ALTO_MAPA_KEY = 'optimizador-rutas-mapa-alto';
+  function refrescarMapa() { if (mapa) { setTimeout(function () { mapa.invalidateSize(); }, 30); setTimeout(function () { mapa.invalidateSize(); }, 250); } }
+  function mapaAmpliado() { return $('#mapa-zona').classList.contains('ampliado'); }
+  function altoMapaActual() { return Math.round($('#mapa-caja').getBoundingClientRect().height); }
+  // Límites del alto del mapa: en teléfono nunca más del 55 % de la ventana (para que «Optimizar» siga a la vista)
+  function limitesAlto() {
+    var movil = window.innerWidth < 900, min = movil ? 240 : 380;   // 240 = min-height del CSS en teléfono
+    return { min: min, max: Math.max(min, Math.round(window.innerHeight * (movil ? 0.55 : 0.92))) };
+  }
+  // px = 0 vuelve al alto automático (≈ 58 % de la ventana en escritorio, ≈ 42 % en teléfono).
+  // Con el mapa ampliado no se mide ni se guarda nada (la caja ampliada ocupa toda la pantalla).
+  function fijarAltoMapa(px, guardar) {
+    if (mapaAmpliado()) return;
+    var caja = $('#mapa-caja'), L = limitesAlto();
+    if (!px) caja.style.height = '';
+    else caja.style.height = clamp(Math.round(px), L.min, L.max) + 'px';
+    if (guardar) { try { if (px) localStorage.setItem(ALTO_MAPA_KEY, String(clamp(Math.round(px), L.min, L.max))); else localStorage.removeItem(ALTO_MAPA_KEY); } catch (e) { /* sin almacenamiento */ } }
+    actualizarAsa();
+    refrescarMapa();
+  }
+  // La manija es un «separator» enfocable: expone el alto actual a los lectores de pantalla
+  function actualizarAsa() {
+    var asa = $('#mapa-asa'), L = limitesAlto(), h = altoMapaActual();
+    if (!asa || mapaAmpliado()) return;
+    asa.setAttribute('aria-valuemin', String(L.min));
+    asa.setAttribute('aria-valuemax', String(L.max));
+    asa.setAttribute('aria-valuenow', String(clamp(h, L.min, L.max)));
+    asa.setAttribute('aria-valuetext', 'Alto del mapa: ' + h + ' píxeles');
+  }
+  // «Ampliar mapa» como diálogo: el resto de la página queda inerte, el foco se queda dentro y vuelve al botón al cerrar
+  var inertes = [];
+  function aislarResto(si) {
+    var z = $('#mapa-zona'), nodo = z;
+    if (si) {
+      inertes = [];
+      while (nodo && nodo !== document.documentElement) {
+        var padre = nodo.parentElement;
+        if (!padre) break;
+        for (var h = padre.firstElementChild; h; h = h.nextElementSibling) {
+          if (h === nodo || /^(SCRIPT|STYLE|LINK|META)$/.test(h.tagName)) continue;
+          inertes.push({ el: h, inert: !!h.inert, hidden: h.getAttribute('aria-hidden') });
+          h.inert = true; h.setAttribute('aria-hidden', 'true');
+        }
+        nodo = padre;
+      }
+    } else {
+      inertes.forEach(function (o) {
+        o.el.inert = o.inert;
+        if (o.hidden == null) o.el.removeAttribute('aria-hidden'); else o.el.setAttribute('aria-hidden', o.hidden);
+      });
+      inertes = [];
+    }
+  }
+  function enfocablesMapa() {
+    return $$('#mapa-zona button, #mapa-zona input, #mapa-zona select, #mapa-zona a[href], #mapa-zona [tabindex]').filter(function (el) {
+      return !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden]') && el.getClientRects().length > 0;
+    });
+  }
+  function ampliarMapa(si) {
+    var z = $('#mapa-zona'), b = $('#btn-mapa-ampliar');
+    if (si === mapaAmpliado()) return;
+    z.classList.toggle('ampliado', si);
+    document.body.classList.toggle('mapa-ampliado', si);
+    if (si) { z.setAttribute('role', 'dialog'); z.setAttribute('aria-modal', 'true'); z.setAttribute('aria-label', 'Mapa ampliado'); }
+    else { z.removeAttribute('role'); z.removeAttribute('aria-modal'); z.setAttribute('aria-label', 'Mapa'); }
+    aislarResto(si);
+    b.textContent = si ? 'Volver (Esc)' : 'Ampliar mapa';
+    b.setAttribute('aria-expanded', si ? 'true' : 'false');
+    $('#btn-mapa-mas').disabled = si; $('#btn-mapa-menos').disabled = si;
+    refrescarMapa();
+    if (si) b.focus(); else { b.focus({ preventScroll: true }); actualizarAsa(); }
+  }
+  /* ----- resumen superpuesto: se puede plegar y se recuerda la elección ----- */
+  var RESUMEN_KEY = 'optimizador-rutas-resumen-plegado';
+  function resumenPlegado() {
+    try { var v = localStorage.getItem(RESUMEN_KEY); if (v === '1') return true; if (v === '0') return false; } catch (e) { /* nada */ }
+    return window.innerWidth < 560;   // sin elección guardada: plegado en teléfono para no tapar el mapa
+  }
+  function fijarResumenPlegado(si, guardar) {
+    var el = $('#mapa-resumen'), b = $('#btn-resumen-plegar');
+    el.classList.toggle('plegado', si);
+    if (b) { b.textContent = si ? 'Mostrar resumen' : 'Ocultar resumen'; b.setAttribute('aria-expanded', si ? 'false' : 'true'); }
+    if (guardar) { try { localStorage.setItem(RESUMEN_KEY, si ? '1' : '0'); } catch (e) { /* sin almacenamiento */ } }
+  }
+  function enlazarMapaUI() {
+    try { var g = parseInt(localStorage.getItem(ALTO_MAPA_KEY), 10); if (g > 0) fijarAltoMapa(g, false); } catch (e) { /* nada */ }
+    actualizarAsa();
+    window.addEventListener('resize', function () {
+      if (mapaAmpliado()) return;
+      var caja = $('#mapa-caja'), h = parseInt(caja.style.height, 10);
+      if (h > 0) fijarAltoMapa(h, false);   // vuelve a aplicar los topes (p. ej. al girar el teléfono); no guarda
+      else actualizarAsa();
+    });
+    $('#btn-mapa-mas').addEventListener('click', function () { fijarAltoMapa(altoMapaActual() + 80, true); });
+    $('#btn-mapa-menos').addEventListener('click', function () { fijarAltoMapa(altoMapaActual() - 80, true); });
+    $('#btn-mapa-ampliar').addEventListener('click', function () { ampliarMapa(!mapaAmpliado()); });
+    document.addEventListener('keydown', function (e) {
+      if (!mapaAmpliado()) return;
+      if (e.key === 'Escape') { e.preventDefault(); ampliarMapa(false); return; }
+      if (e.key !== 'Tab') return;
+      // trampa de foco: Tab y Mayús+Tab dan la vuelta dentro del mapa ampliado
+      var f = enfocablesMapa();
+      if (!f.length) { e.preventDefault(); return; }
+      var primero = f[0], ultimoF = f[f.length - 1], act = document.activeElement;
+      if (e.shiftKey && (act === primero || f.indexOf(act) < 0)) { e.preventDefault(); ultimoF.focus(); }
+      else if (!e.shiftKey && (act === ultimoF || f.indexOf(act) < 0)) { e.preventDefault(); primero.focus(); }
+    });
+    var asa = $('#mapa-asa'), y0 = 0, h0 = 0, arrastrandoAsa = false;
+    asa.addEventListener('pointerdown', function (e) { if (mapaAmpliado()) return; arrastrandoAsa = true; y0 = e.clientY; h0 = altoMapaActual(); try { asa.setPointerCapture(e.pointerId); } catch (x) { /* nada */ } e.preventDefault(); });
+    asa.addEventListener('pointermove', function (e) { if (arrastrandoAsa) fijarAltoMapa(h0 + (e.clientY - y0), false); });
+    ['pointerup', 'pointercancel'].forEach(function (n) { asa.addEventListener(n, function () { if (arrastrandoAsa) { arrastrandoAsa = false; fijarAltoMapa(altoMapaActual(), true); } }); });
+    asa.addEventListener('keydown', function (e) {
+      var paso = e.key === 'PageUp' || e.key === 'PageDown' ? 160 : 40;
+      if (e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); fijarAltoMapa(altoMapaActual() - paso, true); }
+      else if (e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); fijarAltoMapa(altoMapaActual() + paso, true); }
+      else if (e.key === 'Home') { e.preventDefault(); fijarAltoMapa(0, true); }                       // alto automático
+      else if (e.key === 'End') { e.preventDefault(); fijarAltoMapa(limitesAlto().max, true); }       // alto máximo permitido
+    });
+    $('#mapa-resumen').addEventListener('click', function (e) {
+      if (e.target.closest('#btn-resumen-plegar')) { fijarResumenPlegado(!$('#mapa-resumen').classList.contains('plegado'), true); return; }
+      if (!e.target.closest('#btn-resumen-ver')) return;
+      if (mapaAmpliado()) ampliarMapa(false);   // devuelve el foco al botón «Ampliar mapa»
+      irTab('res');
+      var t = $('.tabs'); if (t && t.scrollIntoView) t.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  }
+  // Panel pequeño sobre el mapa con el resultado vigente (todo número pasa por fmt/money; los textos por esc)
+  function actualizarResumenMapa() {
+    var el = $('#mapa-resumen');
+    if (!el) return;
+    if (!ultimo || !ultimo.resultado || !ultimo.resultado.totales) { el.hidden = true; el.innerHTML = ''; return; }
+    var T = ultimo.resultado.totales, ah = ultimo.resultado.ahorro || {}, vp = ultimo.problema;
+    el.innerHTML = '<button type="button" id="btn-resumen-plegar" class="mini mr-plegar" aria-controls="mr-cuerpo" aria-expanded="true">Ocultar resumen</button><div id="mr-cuerpo" class="mr-cuerpo">' +
+      '<div class="mr-linea"><b>' + money(T.costo) + '</b> · ' + fmt(T.km, 1) + ' km · ' + esc(T.vehiculos_usados) + (T.vehiculos_usados === 1 ? ' vehículo' : ' vehículos') + '</div>' +
+      (ultimo.obsoleto ? '<div class="mr-linea mr-obs">Desactualizado: cambiaste datos</div>' : (ah.costo > 0.005 ? '<div class="mr-linea">Ahorro: ' + money(ah.costo) + '</div>' : '')) +
+      '<div class="mr-linea mr-fin">' + esc(finDe(vp) === 'otro' ? 'Termina en ' + nomFin(vp) : (finDe(vp) === 'ultima' ? 'Termina en la última parada' : 'Regresa al depósito')) + '</div>' +
+      '<button type="button" id="btn-resumen-ver" class="mini">Ver resultados</button></div>';
+    el.hidden = false;
+    fijarResumenPlegado(resumenPlegado(), false);
+  }
+
   /* ===================== pestañas ===================== */
   var TABS = ['datos', 'flota', 'peajes', 'trafico', 'res', 'flete'];
   function irTab(id) {
@@ -2062,6 +2318,7 @@
 
   /* ===================== eventos ===================== */
   function enlazar() {
+    enlazarMapaUI();
     // avisos superiores: pausar / reanudar el desplazamiento
     var bt = $('#btn-ticker');
     if (bt) bt.addEventListener('click', function () {
@@ -2090,7 +2347,7 @@
       if (k === 'calles') $('#nota-osrm').hidden = !estado.calles;
       // la tarifa solo cambia el precio, no las rutas: no invalida los resultados
       if (k.indexOf('tarifa.') === 0) { guardarLocalDeb(); renderFleteDeb(); return; }
-      var soloMapa = (k === 'deposito.lat' || k === 'deposito.lon' || k === 'deposito.nombre');
+      var soloMapa = (k === 'deposito.lat' || k === 'deposito.lon' || k === 'deposito.nombre' || k.indexOf('depositoFinal.') === 0);
       cambio({ mapa: soloMapa });
     });
 
@@ -2200,13 +2457,31 @@
     });
 
     // búsqueda de direcciones
-    $('#btn-buscar').addEventListener('click', buscarDireccion);
+    $('#btn-buscar').addEventListener('click', function () { buscarDireccion(); });
     $('#busq-q').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); buscarDireccion(); } });
-    $('#busq-res').addEventListener('click', function (e) {
+    function clicCandidato(e) {
       var b = e.target.closest('[data-cand]');
       if (!b || !candActual) return;
       var c = candActual.lista[+b.dataset.i];
       if (c) accionCandidato(b.dataset.cand, c);
+    }
+    $('#busq-res').addEventListener('click', clicCandidato);
+    $('#fin-res').addEventListener('click', clicCandidato);
+    $('#btn-fin-buscar').addEventListener('click', function () { buscarDireccion('fin'); });
+    $('#fin-q').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); buscarDireccion('fin'); } });
+    $('#btn-fin-mapa').addEventListener('click', function () {
+      setModo('fin');
+      toast('Haz clic en el mapa donde terminan las rutas.');
+      var mz = $('#mapa-zona'); if (mz) mz.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+    $$('input[name="fin"]').forEach(function (r) {
+      r.addEventListener('change', function () {
+        if (!r.checked) return;
+        estado.fin = r.value;
+        aplicarFinUI();
+        cambio();
+        if (r.value === 'otro') toast('Ahora fija el depósito final: busca su dirección, haz clic en el mapa o escribe su latitud y longitud.');
+      });
     });
     $('#btn-geo-lista').addEventListener('click', function () {
       var items = parsearListaDirecciones($('#geo-lista').value);
@@ -2229,7 +2504,7 @@
       estado = estadoVacio(); reiniciarResultados();
       llenarFormulario(); renderResultados(); renderFlete(); mostrarMensajes([], [], null);
       $('#estado-calc').textContent = ''; progresoFin('#prog', false);
-      $('#barrido-res').innerHTML = ''; $('#busq-res').innerHTML = ''; $('#geo-estado').textContent = '';
+      $('#barrido-res').innerHTML = ''; $('#busq-res').innerHTML = ''; $('#fin-res').innerHTML = ''; $('#geo-estado').textContent = '';
       setModo('deposito'); dibujarMapa(false); guardarLocal(); irTab('datos');
       toast('Listo: empieza ubicando el depósito en el mapa o buscando su dirección.');
     });

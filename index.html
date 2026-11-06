@@ -31,9 +31,11 @@
   <button id="btn-ticker" type="button" title="Detener o reanudar el desplazamiento de los avisos">Pausar</button>
 </div>
 
-<header class="hero">
-  <h1>Optimizador de rutas</h1>
-  <p class="sub">Reparto y visitas con varios vehículos, tráfico por hora y peajes. Funciona sin instalar nada (el mapa, las direcciones y las calles reales necesitan internet).</p>
+<header class="topbar">
+  <div class="topbar-tit">
+    <h1>Optimizador de rutas</h1>
+    <p class="sub">Reparto y visitas con varios vehículos, tráfico por hora y peajes. Funciona sin instalar nada (el mapa, las direcciones y las calles reales necesitan internet).</p>
+  </div>
   <div class="top-actions">
     <button id="btn-proy-guardar" title="Descarga un archivo .json con todo tu trabajo">Guardar proyecto</button>
     <button id="btn-proy-cargar" title="Abre un proyecto .json guardado antes">Abrir proyecto</button>
@@ -46,9 +48,68 @@
   No se encontró el archivo <code>motor.js</code> en la misma carpeta que esta página. Sin él no se puede optimizar. Vuelve a copiar la carpeta completa.
 </div>
 
-<div class="layout">
-  <!-- ============ PANEL IZQUIERDO ============ -->
-  <section class="panel" id="principal" aria-label="Datos y resultados">
+<main class="app" id="principal">
+  <section class="mapa-zona" id="mapa-zona" aria-label="Mapa">
+    <div class="map-tools">
+      <b>Clic en el mapa:</b>
+      <div class="seg" role="radiogroup" aria-label="Qué hace un clic en el mapa">
+        <label><input type="radio" name="modo-mapa" value="parada" checked> Agregar parada</label>
+        <label><input type="radio" name="modo-mapa" value="deposito"> Ubicar depósito</label>
+        <label id="lbl-modo-fin" hidden><input type="radio" name="modo-mapa" value="fin"> Ubicar punto final</label>
+        <label><input type="radio" name="modo-mapa" value="peaje"> Agregar peaje</label>
+        <label><input type="radio" name="modo-mapa" value="nada"> Nada (solo mirar)</label>
+      </div>
+      <div class="map-ctrl" role="group" aria-label="Tamaño del mapa">
+        <button type="button" id="btn-mapa-menos" title="Hacer el mapa más pequeño">Mapa más pequeño</button>
+        <button type="button" id="btn-mapa-mas" title="Hacer el mapa más grande">Mapa más grande</button>
+        <button type="button" id="btn-mapa-ampliar" aria-expanded="false" title="Ver el mapa en pantalla casi completa (Esc para volver)">Ampliar mapa</button>
+      </div>
+    </div>
+    <div class="mapa-caja" id="mapa-caja">
+      <div id="mapa" role="application" aria-label="Mapa interactivo de rutas"></div>
+      <div id="mapa-resumen" class="mapa-resumen" hidden aria-live="polite"></div>
+    </div>
+    <div class="mapa-asa" id="mapa-asa" role="separator" aria-orientation="horizontal" tabindex="0" aria-valuemin="380" aria-valuemax="820" aria-valuenow="480" aria-label="Alto del mapa: arrastra o usa las flechas arriba y abajo (Inicio = automático, Fin = máximo)" title="Arrastra para cambiar el alto del mapa"><span></span></div>
+    <div class="leyenda">
+      <span><span class="mk mk-dep">D</span> Depósito de salida</span>
+      <span id="ley-fin" hidden><span class="mk mk-fin">F</span> Depósito final</span>
+      <span><span class="mk mk-parada">1</span> Parada (número = orden en la ruta)</span>
+      <span><span class="mk mk-peaje"><b>P</b></span> Peaje</span>
+      <span id="leyenda-lineas">Líneas continuas = calles reales; discontinuas = línea recta (aprox.)</span>
+    </div>
+    <div id="aviso-teselas" class="msg aviso" hidden>Sin mapa de fondo (¿sin internet?). Los puntos y las rutas se ven igual sobre fondo liso.</div>
+  </section>
+
+    <div class="barra-opt" id="barra-opt">
+      <div class="msgs" id="msgs" role="alert" aria-live="assertive"></div>
+      <div class="barra-grid">
+        <div class="barra-accion">
+          <div class="fila">
+            <button id="btn-optimizar" class="primario grande">Optimizar rutas</button>
+            <button id="btn-cancelar" type="button" hidden title="Detiene las consultas de calles reales en curso (no interrumpe el cálculo de rutas ya iniciado)">Cancelar</button>
+          </div>
+          <div class="progreso" id="prog"><i></i></div>
+          <div id="estado-calc" aria-live="polite"></div>
+        </div>
+        <div class="barra-opc">
+          <div class="fila">
+            <label class="chk" style="font-weight:500;flex:1 1 230px"><input type="checkbox" id="chk-osrm" data-k="calles"> <span>Calles reales <span class="ayuda">(OSRM, requiere internet)</span></span></label>
+            <div style="flex:0 0 190px">
+              <label for="tiempo-calc">Tiempo de cálculo</label>
+              <select id="tiempo-calc" data-k="tiempo">
+                <option value="rapido">Rápido (1 s)</option>
+                <option value="normal">Normal (3 s)</option>
+                <option value="profundo">Profundo (10 s)</option>
+              </select>
+            </div>
+          </div>
+          <p class="ayuda privacidad" id="priv-calles"><b>Privacidad:</b> con «Calles reales» marcada, las coordenadas del depósito y de las paradas (sin nombres) se envían a los servicios públicos de OpenStreetMap (OSRM). Si la desmarcas, no se envía nada de tus paradas; las imágenes del mapa igual se piden a OpenStreetMap.</p>
+          <details class="ayuda" id="nota-osrm"><summary>Aviso de uso justo del servidor público de calles</summary>Se usa el servidor público gratuito de OSRM (router.project-osrm.org): es de uso justo, sin garantía y con límites; no lo uses para cientos de consultas seguidas (se espera ~1 s entre consultas). Solo se envían coordenadas (sin nombres). Los tiempos de OSRM son a flujo libre; el tráfico lo aplica tu perfil. Con más de 100 puntos la tabla se pide por bloques (más lento). Si falla la conexión, se usa la estimación en línea recta (se avisa) y todo sigue funcionando.</details>
+        </div>
+      </div>
+    </div>
+
+  <section class="panel" id="panel" aria-label="Datos y resultados">
     <div class="tabs" role="tablist" aria-label="Pasos">
       <button role="tab" id="tab-datos" aria-controls="pane-datos" aria-selected="true"><span class="n">1</span>Datos</button>
       <button role="tab" id="tab-flota" aria-controls="pane-flota" aria-selected="false"><span class="n">2</span>Flota y costos</button>
@@ -59,7 +120,7 @@
     </div>
 
     <!-- ---- 1. DATOS ---- -->
-    <div class="pane" id="pane-datos" role="tabpanel" aria-labelledby="tab-datos">
+    <div class="pane cols" id="pane-datos" role="tabpanel" aria-labelledby="tab-datos">
       <div class="banner-ej" id="banner-ej" hidden>EJEMPLO – datos ficticios (clientes, costos y peajes inventados solo para probar). Edítalos o pulsa “Nuevo” para empezar con los tuyos.</div>
 
       <div class="card">
@@ -70,6 +131,38 @@
           <div><label for="dep-lon">Longitud</label><input id="dep-lon" data-k="deposito.lon" inputmode="decimal" placeholder="-77.0428"></div>
         </div>
         <p class="ayuda">Tip: busca la dirección aquí abajo, o elige “Ubicar depósito” sobre el mapa y haz clic donde está tu almacén.</p>
+      </div>
+
+      <div class="card" id="card-fin">
+        <h2>¿Dónde termina cada ruta?</h2>
+        <fieldset class="fin-selector">
+          <legend class="visually-hidden">Dónde termina cada ruta</legend>
+          <label class="opcion-fin"><input type="radio" name="fin" value="deposito" checked>
+            <span class="of-tit">Regresa al mismo depósito</span>
+            <span class="of-ayuda">Cada vehículo vuelve al punto de salida al terminar. Es lo más común.</span></label>
+          <label class="opcion-fin"><input type="radio" name="fin" value="otro">
+            <span class="of-tit">Termina en otro depósito o punto final</span>
+            <span class="of-ayuda">Salen del depósito y acaban en otro lugar (otra sede, un patio, tu casa). Tú fijas ese punto.</span></label>
+          <label class="opcion-fin"><input type="radio" name="fin" value="ultima">
+            <span class="of-tit">Termina en la última parada (no regresa)</span>
+            <span class="of-ayuda">No hay tramo de regreso: la ruta acaba en el último cliente. El costo no incluye volver.</span></label>
+        </fieldset>
+        <div id="bloque-fin" hidden>
+          <h3>Depósito final (punto donde terminan las rutas)</h3>
+          <div class="grid">
+            <div><label for="fin-nombre">Nombre</label><input id="fin-nombre" data-k="depositoFinal.nombre" autocomplete="off"></div>
+            <div><label for="fin-lat">Latitud</label><input id="fin-lat" data-k="depositoFinal.lat" inputmode="decimal" placeholder="-12.0464"></div>
+            <div><label for="fin-lon">Longitud</label><input id="fin-lon" data-k="depositoFinal.lon" inputmode="decimal" placeholder="-77.0428"></div>
+          </div>
+          <div class="fila-busq">
+            <div style="flex:1 1 220px"><label for="fin-q">Buscar su dirección</label>
+              <input id="fin-q" type="search" placeholder="Ej.: Av. Argentina 1500, Callao" autocomplete="off"></div>
+            <button id="btn-fin-buscar" type="button" class="primario">Buscar</button>
+            <button id="btn-fin-mapa" type="button">Ubicar con un clic en el mapa</button>
+          </div>
+          <p class="ayuda privacidad"><b>Privacidad:</b> la dirección que escribes se envía al servicio público de OpenStreetMap (Nominatim). Si no quieres enviarla, usa el clic en el mapa o escribe la latitud y longitud.</p>
+          <div id="fin-res" aria-live="polite"></div>
+        </div>
       </div>
 
       <div class="card" id="card-busqueda">
@@ -95,6 +188,13 @@
       </div>
 
       <div class="card">
+        <h2>Tu ruta actual <small class="suave">(opcional, para medir el ahorro)</small></h2>
+        <label for="ruta-actual">Una línea por vehículo, con los ID (o nombres) en el orden que visitas hoy, separados por coma</label>
+        <textarea id="ruta-actual" data-k="actual" placeholder="Vehículo 1: C3, C1, C2&#10;Vehículo 2: C5, C4" spellcheck="false"></textarea>
+        <p class="ayuda">Si lo llenas, el resultado compara el costo de tu ruta de hoy contra la optimizada. Deben aparecer todas las paradas, una sola vez. Puedes escribir “Vehículo 1:” al inicio de cada línea. Se evalúa con los costos del primer tipo de vehículo.</p>
+      </div>
+
+      <div class="card span">
         <h2>Paradas a visitar <small id="cont-paradas" class="suave"></small></h2>
         <div class="acciones">
           <button id="btn-ejemplo" class="primario">Cargar ejemplo</button>
@@ -134,24 +234,16 @@
           <div class="acciones"><button id="btn-pegar-importar">Importar lo pegado</button></div>
         </details>
       </div>
-
-      <div class="card">
-        <h2>Tu ruta actual <small class="suave">(opcional, para medir el ahorro)</small></h2>
-        <label for="ruta-actual">Una línea por vehículo, con los ID (o nombres) en el orden que visitas hoy, separados por coma</label>
-        <textarea id="ruta-actual" data-k="actual" placeholder="Vehículo 1: C3, C1, C2&#10;Vehículo 2: C5, C4" spellcheck="false"></textarea>
-        <p class="ayuda">Si lo llenas, el resultado compara el costo de tu ruta de hoy contra la optimizada. Deben aparecer todas las paradas, una sola vez. Puedes escribir “Vehículo 1:” al inicio de cada línea. Se evalúa con los costos del primer tipo de vehículo.</p>
-      </div>
     </div>
 
     <!-- ---- 2. FLOTA ---- -->
-    <div class="pane" id="pane-flota" role="tabpanel" aria-labelledby="tab-flota" hidden>
+    <div class="pane cols" id="pane-flota" role="tabpanel" aria-labelledby="tab-flota" hidden>
       <div class="banner-ej" id="banner-ej2" hidden>EJEMPLO – editar: los valores de costos son inventados para la demostración.</div>
       <div class="card">
         <h2>Tipos de vehículo <span class="etiqueta-ej" data-ej hidden>EJEMPLO – editar</span></h2>
         <p class="ayuda">Cada tipo tiene su capacidad, sus costos y su hora de salida. El programa decide qué tipo usa en cada ruta (la carga pesada al vehículo grande, la liviana al chico si sale más barato). Si solo tienes un tipo de vehículo, deja uno solo.</p>
         <div id="tipos-lista"></div>
         <div class="acciones"><button id="btn-agregar-tipo">+ Agregar tipo de vehículo</button></div>
-        <label class="chk" style="margin-top:6px"><input type="checkbox" data-k="flota.retorno"> Los vehículos regresan al depósito al terminar</label>
         <div style="max-width:200px;margin-top:8px"><label for="moneda">Moneda (símbolo)</label><input id="moneda" data-k="moneda" maxlength="6"></div>
       </div>
 
@@ -282,51 +374,8 @@
     </div>
 
     <!-- ---- Barra inferior: optimizar ---- -->
-    <div class="barra-opt">
-      <div class="msgs" id="msgs" role="alert" aria-live="assertive"></div>
-      <div class="fila">
-        <label class="chk" style="font-weight:500;flex:1 1 230px"><input type="checkbox" id="chk-osrm" data-k="calles"> <span>Calles reales <span class="ayuda">(OSRM, requiere internet)</span></span></label>
-        <div style="flex:0 0 190px">
-          <label for="tiempo-calc">Tiempo de cálculo</label>
-          <select id="tiempo-calc" data-k="tiempo">
-            <option value="rapido">Rápido (1 s)</option>
-            <option value="normal">Normal (3 s)</option>
-            <option value="profundo">Profundo (10 s)</option>
-          </select>
-        </div>
-      </div>
-      <p class="ayuda privacidad" id="priv-calles"><b>Privacidad:</b> con «Calles reales» marcada, las coordenadas del depósito y de las paradas (sin nombres) se envían a los servicios públicos de OpenStreetMap (OSRM). Si la desmarcas, no se envía nada de tus paradas; las imágenes del mapa igual se piden a OpenStreetMap.</p>
-      <details class="ayuda" id="nota-osrm"><summary>Aviso de uso justo del servidor público de calles</summary>Se usa el servidor público gratuito de OSRM (router.project-osrm.org): es de uso justo, sin garantía y con límites; no lo uses para cientos de consultas seguidas (se espera ~1 s entre consultas). Solo se envían coordenadas (sin nombres). Los tiempos de OSRM son a flujo libre; el tráfico lo aplica tu perfil. Con más de 100 puntos la tabla se pide por bloques (más lento). Si falla la conexión, se usa la estimación en línea recta (se avisa) y todo sigue funcionando.</details>
-      <div class="fila" style="margin-top:8px">
-        <button id="btn-optimizar" class="primario grande">Optimizar rutas</button>
-        <button id="btn-cancelar" type="button" hidden title="Detiene las consultas de calles reales en curso (no interrumpe el cálculo de rutas ya iniciado)">Cancelar</button>
-      </div>
-      <div class="progreso" id="prog"><i></i></div>
-      <div id="estado-calc" aria-live="polite"></div>
-    </div>
   </section>
-
-  <!-- ============ MAPA ============ -->
-  <aside class="mapa-col" aria-label="Mapa">
-    <div class="map-tools">
-      <b style="font-size:.9rem">Clic en el mapa:</b>
-      <div class="seg" role="radiogroup" aria-label="Qué hace un clic en el mapa">
-        <label><input type="radio" name="modo-mapa" value="parada" checked> Agregar parada</label>
-        <label><input type="radio" name="modo-mapa" value="deposito"> Ubicar depósito</label>
-        <label><input type="radio" name="modo-mapa" value="peaje"> Agregar peaje</label>
-        <label><input type="radio" name="modo-mapa" value="nada"> Nada (solo mirar)</label>
-      </div>
-    </div>
-    <div id="mapa" role="application" aria-label="Mapa interactivo de rutas"></div>
-    <div class="leyenda">
-      <span><span class="mk mk-dep">D</span> Depósito</span>
-      <span><span class="mk mk-parada" style="--c:#1f77b4">1</span> Parada (número = orden en la ruta)</span>
-      <span><span class="mk mk-peaje"><b>P</b></span> Peaje</span>
-      <span id="leyenda-lineas">Líneas continuas = calles reales; discontinuas = línea recta (aprox.)</span>
-    </div>
-    <div id="aviso-teselas" class="msg aviso" hidden>Sin mapa de fondo (¿sin internet?). Los puntos y las rutas se ven igual sobre fondo liso.</div>
-  </aside>
-</div>
+</main>
 
 <div id="hojas" aria-hidden="true"></div>
 <div id="toast" role="status" aria-live="polite" hidden></div>

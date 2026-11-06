@@ -101,6 +101,15 @@
  *     costo_equilibrio (solo si su 25 % >= 0.12·n ms; si no, se omite costo_equilibrio)
  *     se ajustan a él.  Holgura que queda: la construcción NN y el armado (~0.1 ms × n);
  *     con n = 400 y tiempo_ms = 100 puede ser ~1.4×; con 300, ~1.1×.
+ * 20. Punto final (v1.2, F): `fin` manda sobre `retorno_deposito` (contradicción = aviso).
+ *     «otro» agrega el nodo n+1 (depósito final; sin demanda, ventana ni servicio) y las
+ *     matrices pasan a (n+2)²; todo el regreso (evaluar, Clarke-Wright, peajes del último
+ *     tramo, flete) usa ese nodo.  Con coordenadas iguales a las del depósito no hay caso
+ *     especial: las distancias estimadas son iguales y el costo coincide con «deposito».
+ *     Con matriz dada, ese caso usa las celdas n+1 que se hayan entregado.  El id del depósito
+ *     final puede repetir el del depósito de salida SOLO si las coordenadas coinciden; si falta
+ *     id se usa «FIN».  Con «ultima», ruta.fin es la última parada de cada ruta.  Campos nuevos:
+ *     ruta.fin = {id, nombre} y ruta.fin_modo.
  * ========================================================================== */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -108,7 +117,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '1.1.0';
+  var VERSION = '1.2.0';
   var R_TIERRA_KM = 6371.0088;
   var M_POR_GRADO = R_TIERRA_KM * 1000 * Math.PI / 180; // metros por grado de latitud
   var TOL = 1e-7;      // mejora mínima para aceptar un movimiento
@@ -253,6 +262,12 @@
 
   /* ------------------------------------------------------------------- validar */
   var OBJETIVOS = ['costo', 'distancia', 'tiempo'];
+  var FINES = ['deposito', 'otro', 'ultima'];
+  // modo de término de las rutas: `fin` manda; si falta, se deduce de retorno_deposito (false ⇒ «ultima»)
+  function modoFin(p) {
+    if (p.fin !== undefined && p.fin !== null) return p.fin;
+    return p.retorno_deposito === false ? 'ultima' : 'deposito';
+  }
 
   function validar(p) {
     var errores = [], avisos = [];
@@ -273,6 +288,13 @@
       errores.push('salida_min debe ser un número ≥ 0 (minutos desde medianoche, p. ej. 480 = 08:00).');
     if (p.retorno_deposito !== undefined && p.retorno_deposito !== null && typeof p.retorno_deposito !== 'boolean')
       errores.push('retorno_deposito debe ser true o false.');
+    var finModo = 'deposito';
+    if (p.fin !== undefined && p.fin !== null && FINES.indexOf(p.fin) < 0) errores.push('fin debe ser "deposito", "otro" o "ultima".');
+    else {
+      finModo = modoFin(p);
+      if (p.fin != null && typeof p.retorno_deposito === 'boolean' && (p.retorno_deposito === false) !== (p.fin === 'ultima'))
+        avisos.push('fin («' + p.fin + '») y retorno_deposito (' + p.retorno_deposito + ') se contradicen: manda fin.');
+    }
     if (p.objetivo !== undefined && p.objetivo !== null && OBJETIVOS.indexOf(p.objetivo) < 0)
       errores.push('objetivo debe ser "costo", "distancia" o "tiempo".');
     if (p.peso_peaje !== undefined && p.peso_peaje !== null && (!esNum(p.peso_peaje) || p.peso_peaje < 0))
@@ -396,6 +418,25 @@
         }
       }
     }
+    // depósito final (solo con fin:"otro")
+    var dfOk = false;
+    if (finModo === 'otro') {
+      var DF = p.deposito_final;
+      if (!esObj(DF)) errores.push('Con fin:"otro" falta deposito_final: {id, nombre, lat, lon}.');
+      else {
+        coord(DF, 'Depósito final');
+        dfOk = esNum(DF.lat) && esNum(DF.lon);
+        if (DF.id !== undefined && DF.id !== null) {
+          if ((typeof DF.id !== 'string' && !esNum(DF.id)) || String(DF.id) === '') errores.push('Depósito final: el id debe ser texto o número.');
+          else if (tiene(vistos, String(DF.id))) {
+            var mismoFis = depOk && dfOk && esNum(p.deposito.lat) && esNum(p.deposito.lon) && DF.lat === p.deposito.lat && DF.lon === p.deposito.lon && vistos[String(DF.id)] === 'el depósito';
+            if (!mismoFis) errores.push('Id duplicado: «' + DF.id + '» (el depósito final no puede repetir el id del depósito de salida ni de una parada).');
+          }
+        }
+        if (dfOk && depOk && esNum(p.deposito.lat) && DF.lat === p.deposito.lat && DF.lon === p.deposito.lon)
+          avisos.push('El depósito final tiene las mismas coordenadas que el de salida: equivale a fin:"deposito".');
+      }
+    } else if (p.deposito_final !== undefined && p.deposito_final !== null) avisos.push('deposito_final se ignora porque fin no es "otro".');
     if (isFinite(capTotal) && demTotal > capTotal + EPS)
       avisos.push('La demanda total (' + demTotal + ') supera la capacidad de toda la flota (' + capTotal + '): algunas paradas quedarán sin atender.');
 
@@ -442,11 +483,12 @@
     if (p.matriz !== undefined && p.matriz !== null) {
       if (!esObj(p.matriz)) errores.push('«matriz» debe ser un objeto {km, min, peaje}.');
       else {
-        var N = n + 1;
+        var N = n + 1 + (finModo === 'otro' ? 1 : 0);
+        var detalleN = finModo === 'otro' ? 'depósito + ' + n + ' paradas + depósito final (fin:"otro")' : 'depósito + ' + n + ' paradas';
         ['km', 'min', 'peaje'].forEach(function (nom) {
           var M = p.matriz[nom];
           if (M === undefined || M === null) return;
-          if (!Array.isArray(M) || M.length !== N) { errores.push('matriz.' + nom + ' debe ser de ' + N + '×' + N + ' (depósito + ' + n + ' paradas); tiene ' + (Array.isArray(M) ? M.length + ' filas' : 'otro formato') + '.'); return; }
+          if (!Array.isArray(M) || M.length !== N) { errores.push('matriz.' + nom + ' debe ser de ' + N + '×' + N + ' (' + detalleN + '); tiene ' + (Array.isArray(M) ? M.length + ' filas' : 'otro formato') + '.'); return; }
           var faltan = 0, malo = false;
           for (var a = 0; a < N && !malo; a++) {
             if (!Array.isArray(M[a]) || M[a].length !== N) { errores.push('matriz.' + nom + ': la fila ' + a + ' debe tener ' + N + ' columnas.'); malo = true; break; }
@@ -476,6 +518,7 @@
   // Calcula matrices (arreglos de arreglos) completando lo que falte. p ya validado.
   function calcularMatrices(p) {
     var pts = [p.deposito].concat(p.paradas);
+    if (modoFin(p) === 'otro') pts.push(p.deposito_final);
     var N = pts.length;
     var E = esObj(p.estimacion) ? p.estimacion : {};
     var circ = esNum(E.circuidad) && E.circuidad > 0 ? E.circuidad : 1.35;
@@ -580,7 +623,7 @@
   }
 
   function crearContexto(p) {
-    var n = p.paradas.length, N = n + 1;
+    var n = p.paradas.length, finM = modoFin(p), N = n + 1 + (finM === 'otro' ? 1 : 0);
     var mats = calcularMatrices(p);
     var pf = resolverPerfil(p);
     var sinTraf = true;
@@ -592,7 +635,7 @@
       listaPeajes: [],
       dem: new Float64Array(N), serv: new Float64Array(N), vIni: new Float64Array(N), vFin: new Float64Array(N),
       ids: [String(p.deposito.id !== undefined ? p.deposito.id : 'DEP')], nombres: [p.deposito.nombre !== undefined ? p.deposito.nombre : 'Depósito'],
-      retorno: p.retorno_deposito !== false,
+      finModo: finM, fi: finM === 'otro' ? n + 1 : 0, retorno: finM !== 'ultima',
       perfil: pf.perfil, perfilOrigen: pf.origen, sinTraf: sinTraf,
       obj: obj, objetivo: p.objetivo || 'costo',
       pesoPeaje: p.peso_peaje == null ? 1 : p.peso_peaje,
@@ -616,6 +659,12 @@
         if (s.ventana[1] < s.ventana[0]) { c.vFin[i + 1] = s.ventana[1] + 1440; c.cruzaMedianoche++; }
         else c.vFin[i + 1] = s.ventana[1];
       } else { c.vIni[i + 1] = -Infinity; c.vFin[i + 1] = Infinity; }
+    }
+    if (finM === 'otro') { // nodo n+1: depósito final (sin demanda, ventana ni servicio)
+      var DF = p.deposito_final;
+      c.ids.push(DF.id !== undefined && DF.id !== null ? String(DF.id) : 'FIN');
+      c.nombres.push(DF.nombre !== undefined ? DF.nombre : 'Depósito final');
+      c.vIni[n + 1] = -Infinity; c.vFin[n + 1] = Infinity;
     }
     // vehículos concretos ("slots"): uno por unidad de cada tipo
     c.slotTipo = []; c.wBal = []; c.capMax = 0;
@@ -675,7 +724,7 @@
     }
     var ret = null, fin = t;
     if (c.retorno) {
-      var a0 = prev * N;
+      var a0 = prev * N + c.fi;
       var mb0 = c.minF[a0];
       var d0 = c.sinTraf ? mb0 : durTraf(t, mb0, c.perfil);
       km += c.kmF[a0]; tol += c.tolF[a0]; cond += d0; base += mb0;
@@ -884,7 +933,7 @@
       if (rutaDe[i] < 0) continue;
       for (j = 1; j <= n; j++) {
         if (i === j || rutaDe[j] < 0) continue;
-        ahorros.push([arco(i, 0) + arco(0, j) - arco(i, j), i, j]);
+        ahorros.push([(c.retorno ? arco(i, c.fi) : 0) + arco(0, j) - arco(i, j), i, j]);
       }
     }
     ahorros.sort(function (x, y) { return y[0] - x[0] || x[1] - y[1] || x[2] - y[2]; });
@@ -1344,7 +1393,7 @@
     if (e.ret) {
       retorno = { km: e.ret.km, min: e.ret.min, peaje: e.ret.peaje };
       var l2 = c.listaPeajes[e.ret.a];
-      if (l2) for (var z2 = 0; z2 < l2.length; z2++) peajes.push({ id: l2[z2].id, nombre: l2[z2].nombre, costo: l2[z2].costo, entre: [prevId, c.ids[0]] });
+      if (l2) for (var z2 = 0; z2 < l2.length; z2++) peajes.push({ id: l2[z2].id, nombre: l2[z2].nombre, costo: l2[z2].costo, entre: [prevId, c.ids[c.fi]] });
     }
     var auto = T.modo === 'auto';
     return {
@@ -1353,6 +1402,7 @@
       paradas: paradas, salida_deposito_min: e.salida, salida_auto: auto,
       salida_alternativas: auto && so.alts ? submuestra(so.alts, { salida_min: e.salida, costo: e.total }) : [],
       regreso_min: e.fin, retorno_deposito: c.retorno,
+      fin_modo: c.finModo, fin: c.finModo === 'ultima' ? (paradas.length ? { id: paradas[paradas.length - 1].id, nombre: paradas[paradas.length - 1].nombre } : null) : { id: c.ids[c.fi], nombre: c.nombres[c.fi] },
       km: e.km, min_conduccion: e.cond, min_flujo_libre: e.base, min_espera: e.esp, min_servicio: e.serv, min_jornada: e.jor,
       carga: e.carga, retorno: retorno, peajes: peajes,
       costo: { fijo: e.cFijo, km: e.cKm, hora: e.cHr, peajes: e.tol, total: e.total },
@@ -1418,7 +1468,7 @@
     if (c.tipos.length > 1 || (esObj(p && p.flota) && Array.isArray(p.flota.tipos)))
       s.push('Flota: ' + c.tipos.map(function (T) { return T.cantidad + ' × ' + T.nombre + ' (capacidad ' + (isFinite(T.cap) ? T.cap : 'sin límite') + ')'; }).join(', ') + '. Los costos, la capacidad y la jornada máxima son de cada tipo.');
     if (c.cruzaMedianoche) s.push(c.cruzaMedianoche + ' ventana(s) cruzan la medianoche: el fin se interpreta del día siguiente (+1440 min).');
-    s.push(c.retorno ? 'Cada ruta termina en el depósito; la jornada se cuenta de la salida al regreso (incluye espera y servicio).' : 'Cada ruta termina en su última parada (sin regreso al depósito); la jornada termina cuando sale de esa parada.');
+    s.push(c.finModo === 'otro' ? 'Cada ruta termina en el depósito final «' + c.nombres[c.fi] + '» (distinto del de salida); la jornada se cuenta de la salida a esa llegada (incluye espera y servicio).' : c.retorno ? 'Cada ruta termina en el depósito; la jornada se cuenta de la salida al regreso (incluye espera y servicio).' : 'Cada ruta termina en su última parada (sin regreso al depósito); la jornada termina cuando sale de esa parada.');
     s.push('Costo = fijo por vehículo usado + km × costo_km + horas de jornada × costo_hora + peajes.');
     s.push('Ventanas duras: si se llega antes se espera; el servicio debe comenzar antes del fin de la ventana.');
     s.push('Objetivo de optimización: ' + c.objetivo + (c.obj === 0 && c.pesoPeaje !== 1 ? ' (peajes ponderados ×' + c.pesoPeaje + ' dentro del objetivo; el costo reportado es el real)' : '') + '.');
