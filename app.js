@@ -126,7 +126,7 @@
     var t = $('#toast');
     t.textContent = msg; t.hidden = false;
     clearTimeout(toastT);
-    toastT = setTimeout(function () { t.hidden = true; }, 3800);
+    toastT = setTimeout(function () { t.hidden = true; }, Math.min(7000, 2600 + String(msg).length * 35));
   }
   function getPath(o, path) {
     return path.split('.').reduce(function (a, k) { return a == null ? undefined : a[k]; }, o);
@@ -1091,7 +1091,25 @@
   }
   async function osrmFetch(url, ms) {
     await turnoRed('osrm', GAP_MS);
-    return fetchJson(url, ms, 'el servidor de calles');
+    try { return await fetchJson(url, ms, 'el servidor de calles'); }
+    catch (e) {
+      // un solo reintento automático si el servidor público está ocupado (429/5xx); nunca si cancelaste
+      if (cancelado || !/respondió (429|5\d\d)/.test(e.message)) throw e;
+      await sleep(2500);
+      if (cancelado) throw new Error('cancelado por ti');
+      await turnoRed('osrm', GAP_MS);
+      return fetchJson(url, ms, 'el servidor de calles');
+    }
+  }
+  // Traduce el error técnico a algo que el usuario pueda entender y a qué hacer.
+  function explicarFalloRed(msg) {
+    msg = String(msg || '');
+    if (/tard[oó] demasiado/.test(msg)) return 'el servidor público de calles tardó demasiado en responder (suele estar saturado). Espera un minuto y reintenta.';
+    if (/respondi[oó] (429|403)/.test(msg)) return 'el servidor público de calles está limitando el uso (uso justo). Espera un par de minutos y reintenta.';
+    if (/respondi[oó] 5\d\d/.test(msg)) return 'el servidor público de calles tuvo un fallo temporal. Reintenta en un minuto.';
+    if (/sin conexi[oó]n/.test(msg)) return 'no hubo conexión con el servidor de calles (¿sin internet o con la señal débil?). Revisa tu conexión y reintenta.';
+    if (/respuesta inesperada/.test(msg)) return 'el servidor de calles devolvió una respuesta que no se pudo leer. Reintenta; si se repite, usa líneas rectas.';
+    return msg + '.';
   }
   function firmaPuntos(pr) {
     return puntosDe(pr).map(function (p) { return p.lat.toFixed(6) + ',' + p.lon.toFixed(6); }).join('|');
@@ -1142,7 +1160,7 @@
         }
       }
     } catch (e) {
-      avisos.push('No se pudieron obtener las distancias por calles reales (' + e.message + '). Se usa la estimación en línea recta; el cálculo sigue funcionando.');
+      avisos.push('No se pudieron obtener las distancias por calles reales: ' + explicarFalloRed(e.message) + ' Mientras tanto se usa una estimación en línea recta: el plan sirve, pero las distancias, los tiempos y los peajes son aproximados. Usa «Reintentar calles reales».');
       return null;
     }
     for (i = 0; i < n; i++) {
@@ -1428,6 +1446,7 @@
     if (of) { of.disabled = v || !Motor; of.textContent = v ? 'Calculando…' : 'Optimizar rutas'; }
     if (cf) cf.hidden = !v;
     if (ef && !v) ef.hidden = true;
+    actualizarReintento();
     if (v) { cancelado = false; ctlRed = typeof AbortController !== 'undefined' ? new AbortController() : null; }
     else ctlRed = null;
   }
@@ -1562,6 +1581,23 @@
     return res;
   }
 
+  // ¿El último plan se calculó sin calles reales (o no se pudieron trazar) aunque están activadas?
+  function hayFalloCalles() {
+    return !!(ultimo && estado.calles && !ultimo.obsoleto && (!ultimo.usoOSRM || ultimo.legsError));
+  }
+  function actualizarReintento() {
+    var b = $('#btn-reintentar-calles'); if (b) b.hidden = ocupado || !hayFalloCalles();
+  }
+  async function reintentarCalles() {
+    if (ocupado || !ultimo) return;
+    if (!hayFalloCalles()) { optimizarClick(); return; }
+    if (!ultimo.usoOSRM) { optimizarClick(); return; }   // el plan se calculó con distancias estimadas: se rehace completo con las reales
+    var ctx = ultimo, ms = tiempoValido(estado.tiempo) ? TIEMPOS[estado.tiempo] : 3000;
+    ctx.legsError = null; ctx.refino = null;
+    setOcupado(true);
+    try { await afinarConCalles(ctx, ms, []); } finally { setOcupado(false); }
+  }
+
   async function optimizarClick() {
     if (ocupado) return;
     if (!Motor) { mostrarMensajes(['No se cargó motor.js; no se puede optimizar.'], [], null); return; }
@@ -1692,7 +1728,7 @@
       ctx.legsError = e.message;
       progresoFin('#prog', false);
       $('#estado-calc').textContent = 'No se pudo completar el trazado por calles reales.';
-      mostrarMensajes([], (avisosPrevios || []).concat(ctx.avisosRed || [], ['No se pudo trazar la ruta por calles reales (' + e.message + '). Las rutas se muestran como línea recta (aprox.) y los peajes quedan con la detección en línea recta, sin verificar.']), null);
+      mostrarMensajes([], (avisosPrevios || []).concat(ctx.avisosRed || [], ['No se pudo trazar la ruta por calles reales: ' + explicarFalloRed(e.message) + ' Las rutas se muestran como línea recta (aprox.) y los peajes quedan con la detección en línea recta, sin verificar. Usa «Reintentar calles reales».']), null);
     }
     if (ctx !== ultimo) return;
     renderResultados(); renderFlete(); dibujarMapa(false);
@@ -1848,7 +1884,7 @@
   function textoRefino(U) {
     var pr = U.problema, rf = U.refino, t = '';
     if (U.usoOSRM) {
-      if (U.legsError) return '<div class="verif aviso-v">No se pudo trazar las rutas por calles reales (' + esc(U.legsError) + '): se muestran como línea recta (aprox.)' + (pr.peajes.length ? ' y los peajes quedan sin verificar con la ruta real' : '') + '.</div>';
+      if (U.legsError) return '<div class="verif aviso-v">No se pudo trazar las rutas por calles reales: ' + esc(explicarFalloRed(U.legsError)) + ' Se muestran como línea recta (aprox.)' + (pr.peajes.length ? ' y los peajes quedan sin verificar con la ruta real' : '') + '. ' + '<button type="button" class="mini" data-reintentar-calles>Reintentar calles reales</button>' + '</div>';
       if (!rf) return '<div class="verif">' + (ocupado ? 'Trazando las rutas por calles reales' + (pr.peajes.length ? ' y verificando los peajes' : '') + '…' : '') + '</div>';
       t = 'Rutas trazadas por calles reales.';
       if (rf.hayPeajes) {
@@ -1860,10 +1896,11 @@
       }
       return '<div class="verif ok-v">' + t + '</div>';
     }
-    return '<div class="verif">' + (estado.calles ? 'No se pudieron obtener calles reales: ' : 'Calles reales desactivadas: ') + 'distancias estimadas en línea recta × ' + esc(pr.estimacion.circuidad) + (pr.peajes.length ? '; los peajes se detectan en línea recta (sin verificar)' : '') + '. Las rutas del mapa son líneas rectas (aprox.).</div>';
+    return '<div class="verif' + (estado.calles ? ' aviso-v' : '') + '">' + (estado.calles ? 'No se pudieron obtener calles reales: ' : 'Calles reales desactivadas: ') + 'distancias estimadas en línea recta × ' + esc(pr.estimacion.circuidad) + (pr.peajes.length ? '; los peajes se detectan en línea recta (sin verificar)' : '') + '. Las rutas del mapa son líneas rectas (aprox.).' + (estado.calles ? ' ' + '<button type="button" class="mini" data-reintentar-calles>Reintentar calles reales</button>' : '') + '</div>';
   }
 
   function renderResultados() {
+    actualizarReintento();
     var cont = $('#res-contenido');
     if (!ultimo) {
       actualizarResumenMapa();
@@ -2619,6 +2656,7 @@
 
     // optimizar y resultados
     $('#btn-optimizar').addEventListener('click', optimizarClick);
+    $('#btn-reintentar-calles').addEventListener('click', reintentarCalles);
     $('#btn-cancelar').addEventListener('click', cancelarCalculo);
     $('#btn-barrido').addEventListener('click', barrido);
     $('#res-contenido').addEventListener('click', function (e) {
@@ -2630,6 +2668,7 @@
         construirHojas(); setTimeout(function () { window.print(); }, 50);
       }
       if (e.target.closest('#btn-ir-flete')) irTab('flete');
+      if (e.target.closest('[data-reintentar-calles]')) reintentarCalles();
     });
     $('#barrido-res').addEventListener('click', function (e) {
       var b = e.target.closest('#btn-usar-hora');
