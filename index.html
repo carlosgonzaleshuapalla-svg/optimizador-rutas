@@ -21,15 +21,16 @@
 <body>
 <a class="skip" href="#principal">Saltar al contenido</a>
 
-<div class="ticker" id="ticker" role="region" aria-label="Avisos importantes">
-  <div class="ticker-vista">
-    <div class="ticker-pista">
-      <ul class="ticker-grupo"><li>Sin tráfico en vivo: el tráfico es un perfil por hora que tú defines</li><li>Las tarifas de peaje y tus costos los pones tú: la aplicación no trae precios</li><li>Método heurístico: no garantiza el óptimo absoluto</li><li>Direcciones y calles reales usan OpenStreetMap (internet); sin conexión se estima en línea recta</li><li>Las cotizaciones son un borrador, no un comprobante de pago</li></ul>
-      <ul class="ticker-grupo" aria-hidden="true"><li>Sin tráfico en vivo: el tráfico es un perfil por hora que tú defines</li><li>Las tarifas de peaje y tus costos los pones tú: la aplicación no trae precios</li><li>Método heurístico: no garantiza el óptimo absoluto</li><li>Direcciones y calles reales usan OpenStreetMap (internet); sin conexión se estima en línea recta</li><li>Las cotizaciones son un borrador, no un comprobante de pago</li></ul>
-    </div>
-  </div>
-  <button id="btn-ticker" type="button" title="Detener o reanudar el desplazamiento de los avisos">Pausar</button>
-</div>
+<details class="avisos" id="avisos">
+  <summary><span class="avisos-corto"><b>Antes de usar:</b> sin tráfico en vivo · las tarifas y costos los pones tú · resultado aproximado.</span> <span class="avisos-mas">Ver todos los avisos</span></summary>
+  <ul>
+    <li>Sin tráfico en vivo: el tráfico es un perfil por hora que tú defines.</li>
+    <li>Las tarifas de peaje y tus costos los pones tú: la aplicación no trae precios.</li>
+    <li>Método heurístico: no garantiza el óptimo absoluto.</li>
+    <li>Direcciones y calles reales usan OpenStreetMap (internet); sin conexión se estima en línea recta.</li>
+    <li>Las cotizaciones son un borrador, no un comprobante de pago.</li>
+  </ul>
+</details>
 
 <header class="topbar">
   <div class="topbar-tit">
@@ -37,10 +38,10 @@
     <p class="sub">Reparto y visitas con varios vehículos, tráfico por hora y peajes. Funciona sin instalar nada (el mapa, las direcciones y las calles reales necesitan internet).</p>
   </div>
   <div class="top-actions">
-    <button id="btn-proy-guardar" title="Descarga un archivo .json con todo tu trabajo">Guardar proyecto</button>
-    <button id="btn-proy-cargar" title="Abre un proyecto .json guardado antes">Abrir proyecto</button>
+    <button id="btn-proy-guardar" title="Descarga un archivo .json con todo tu trabajo">Guardar<span class="solo-pc"> proyecto</span></button>
+    <button id="btn-proy-cargar" title="Abre un proyecto .json guardado antes">Abrir<span class="solo-pc"> proyecto</span></button>
     <input type="file" id="file-proy" accept=".json,application/json" hidden>
-    <button id="btn-nuevo" class="peligro" title="Borra todo y empieza de cero">Nuevo (vaciar todo)</button>
+    <button id="btn-nuevo" class="peligro" title="Borra todo y empieza de cero">Nuevo<span class="solo-pc"> (vaciar todo)</span></button>
   </div>
 </header>
 
@@ -86,7 +87,7 @@
         <div class="barra-accion">
           <div class="fila">
             <button id="btn-optimizar" class="primario grande">Optimizar rutas</button>
-            <button id="btn-cancelar" type="button" hidden title="Detiene las consultas de calles reales en curso (no interrumpe el cálculo de rutas ya iniciado)">Cancelar</button>
+            <button id="btn-cancelar" type="button" hidden title="Detiene el cálculo en curso; no cambia ningún resultado">Cancelar</button>
           </div>
           <div class="progreso" id="prog"><i></i></div>
           <div id="estado-calc" aria-live="polite"></div>
@@ -378,6 +379,13 @@
 </main>
 
 <div id="hojas" aria-hidden="true"></div>
+<div class="accion-fija" id="accion-fija">
+  <span id="estado-fijo" aria-hidden="true" hidden></span>
+  <div class="accion-fija-fila">
+    <button type="button" id="btn-optimizar-fijo" class="primario">Optimizar rutas</button>
+    <button type="button" id="btn-cancelar-fijo" hidden>Cancelar</button>
+  </div>
+</div>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="lib/leaflet.js"></script>

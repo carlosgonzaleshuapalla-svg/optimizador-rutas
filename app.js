@@ -1424,6 +1424,10 @@
     $('#btn-barrido').disabled = v || !Motor;
     $('#btn-optimizar').textContent = v ? 'Calculando…' : 'Optimizar rutas';
     var bc = $('#btn-cancelar'); if (bc) bc.hidden = !v;
+    var of = $('#btn-optimizar-fijo'), cf = $('#btn-cancelar-fijo'), ef = $('#estado-fijo');
+    if (of) { of.disabled = v || !Motor; of.textContent = v ? 'Calculando…' : 'Optimizar rutas'; }
+    if (cf) cf.hidden = !v;
+    if (ef && !v) ef.hidden = true;
     if (v) { cancelado = false; ctlRed = typeof AbortController !== 'undefined' ? new AbortController() : null; }
     else ctlRed = null;
   }
@@ -1431,6 +1435,7 @@
     if (!ocupado) return;
     cancelado = true;
     if (ctlRed) ctlRed.abort();
+    hiloCancelar();
     $('#estado-calc').textContent = 'Cancelando…';
   }
   // Un cálculo queda «viejo» si cambiaron los datos (o se cargó otro proyecto) mientras esperaba la red.
@@ -1489,17 +1494,70 @@
     return res.rutas.map(function (r) { return r.paradas.map(function (s) { return s.id; }).join('>'); }).sort().join('|');
   }
 
-  // Ejecuta el motor cediendo antes el hilo para que la pantalla muestre "calculando".
+  /* ----- cálculo en un hilo aparte (Web Worker) ----- */
+  // Con el hilo aparte la pantalla sigue viva y «Cancelar» funciona al instante. Si el navegador no lo permite
+  // (por ejemplo abriendo index.html con doble clic) o el hilo no arranca, se calcula en el hilo principal como antes.
+  var hilo = null, hiloOk = (typeof Worker !== 'undefined' && /^https?:$/.test(location.protocol)), hiloSeq = 0, hiloPend = null;
+  function hiloCerrar() {
+    if (hilo) { try { hilo.terminate(); } catch (e) { /* nada */ } hilo = null; }
+  }
+  function hiloAbrir() {
+    if (hilo) return hilo;
+    hilo = new Worker('trabajador.js');
+    hilo.onmessage = function (ev) {
+      var m = ev.data || {}, p = hiloPend;
+      if (!p || m.id !== p.id) return;
+      if (m.tipo === 'progreso') { if (p.onProg) p.onProg(m.p); return; }
+      hiloPend = null; p.huboRespuesta = true;
+      if (m.tipo === 'fin') p.ok(m.r); else p.ok({ ok: false, errores: ['Error interno del motor: ' + m.mensaje] });
+    };
+    hilo.onerror = function (ev) {
+      var p = hiloPend; hiloCerrar();
+      if (ev && ev.preventDefault) ev.preventDefault();
+      if (p) { hiloPend = null; p.fallo(new Error('hilo')); }
+    };
+    return hilo;
+  }
+  // op: 'optimizar' | 'barrer'. Devuelve el resultado del motor, o { cancelado: true } si el usuario canceló.
+  function motorAparte(op, args, opts, onProg) {
+    var enPrincipal = function () {
+      return cederHilo().then(function () {
+        try {
+          if (op === 'optimizar') return Motor.optimizar(args, opts);
+          return Motor.barrerHoraSalida(args, opts);
+        } catch (e) { return { ok: false, errores: ['Error interno del motor: ' + e.message] }; }
+      });
+    };
+    if (!hiloOk) return enPrincipal();
+    return new Promise(function (ok) {
+      var id = ++hiloSeq, listo = false;
+      var fin = function (v) { if (!listo) { listo = true; ok(v); } };
+      try { hiloAbrir(); } catch (e) { hiloOk = false; hiloCerrar(); enPrincipal().then(fin); return; }
+      hiloPend = {
+        id: id, onProg: onProg, ok: fin,
+        fallo: function () { hiloOk = false; enPrincipal().then(fin); },
+        cancelar: function () { fin({ cancelado: true }); }
+      };
+      hilo.postMessage({ id: id, op: op, args: args, opts: opts });
+    });
+  }
+  function hiloCancelar() {
+    var p = hiloPend; hiloPend = null;
+    hiloCerrar();
+    if (p && p.cancelar) p.cancelar();
+  }
+
+  // Ejecuta el motor sin congelar la pantalla y muestra el avance real (mejor costo hasta ahora).
   async function correrMotor(problema, ms, idBarra) {
-    $('#estado-calc').textContent = 'Calculando… (hasta ' + Math.round(ms / 1000) + ' s). La pantalla puede quedar quieta unos segundos.';
+    $('#estado-calc').textContent = 'Calculando… (hasta ' + Math.round(ms / 1000) + ' s)' + (hiloOk ? '' : '. La pantalla puede quedar quieta unos segundos.');
     progresoIniciar(idBarra, ms);
     await cederHilo();
-    var t0 = performance.now(), res;
-    try {
-      res = Motor.optimizar(paraMotor(problema), { semilla: 1, tiempo_ms: ms, progreso: function () { /* el motor es síncrono: la barra avanza por CSS */ } });
-    } catch (e) {
-      res = { ok: false, errores: ['Error interno del motor: ' + e.message] };
-    }
+    var t0 = performance.now();
+    var res = await motorAparte('optimizar', paraMotor(problema), { semilla: 1, tiempo_ms: ms }, function (p) {
+      if (cancelado || !p) return;
+      $('#estado-calc').textContent = 'Calculando… mejor costo hasta ahora ' + moneyTxt(p.mejor_costo) + ' · ' + fmt(p.iteraciones, 0) + ' pruebas · ' + Math.min(100, Math.round((p.fraccion || 0) * 100)) + ' %';
+    });
+    if (res && res.cancelado) return res;
     if (res) res.seg = ((performance.now() - t0) / 1000).toFixed(1);
     return res;
   }
@@ -1528,6 +1586,7 @@
       }
       var ms = tiempoValido(estado.tiempo) ? TIEMPOS[estado.tiempo] : 3000;
       var res = await correrMotor(problema, ms, '#prog');
+      if (cancelado || (res && res.cancelado)) { avisarDescartado('Cancelaste el cálculo. No se cambió ningún resultado.'); return; }
       if (versionEstado !== ver0) { avisarDescartado('Cambiaste datos mientras se calculaba: ese resultado se descartó para no mostrarte un plan viejo. Pulsa “Optimizar rutas” otra vez.'); return; }
       if (!res || !res.ok) {
         progresoFin('#prog', false);
@@ -1617,6 +1676,7 @@
         var firmaAntes = firmaPlan(ctx.resultado);
         var res2 = await correrMotor(pr, Math.max(1000, Math.round(ms * 0.6)), '#prog');
         if (ctx !== ultimo) return;
+        if (cancelado || (res2 && res2.cancelado)) { quedaDif = true; break; }
         if (!res2 || !res2.ok) break;
         reopt++;
         res2.supuestos = res2.supuestos || [];
@@ -1930,13 +1990,13 @@
       }
       var porPunto = { rapido: 250, normal: 600, profundo: 1500 }[estado.tiempo] || 600;
       var total = puntos * porPunto;
-      out.innerHTML = '<div class="msg info">Calculando ' + puntos + ' horas de salida (≈ ' + Math.ceil(total / 1000) + ' s). La pantalla puede quedar quieta hasta terminar…</div>';
+      out.innerHTML = '<div class="msg info">Calculando ' + puntos + ' horas de salida (≈ ' + Math.ceil(total / 1000) + ' s)' + (hiloOk ? '. Puedes cancelar cuando quieras.' : '. La pantalla puede quedar quieta hasta terminar…') + '</div>';
       progresoIniciar('#prog-barrido', total);
       await cederHilo();
-      var r;
-      try { r = Motor.barrerHoraSalida(paraMotor(pr), { desde_min: desde, hasta_min: hasta, paso_min: paso, tiempo_ms_por_punto: porPunto }); }
-      catch (e) { progresoFin('#prog-barrido', false); out.innerHTML = '<div class="msg error">Error del motor: ' + esc(e.message) + '</div>'; return; }
-      progresoFin('#prog-barrido', true);
+      var r = await motorAparte('barrer', paraMotor(pr), { desde_min: desde, hasta_min: hasta, paso_min: paso, tiempo_ms_por_punto: porPunto });
+      if (cancelado || (r && r.cancelado)) { progresoFin('#prog-barrido', false); out.innerHTML = '<div class="msg aviso">Cancelaste la búsqueda de la mejor hora.</div>'; return; }
+      if (versionEstado !== verB) { progresoFin('#prog-barrido', false); out.innerHTML = '<div class="msg aviso">Cambiaste datos mientras se calculaba: se descartó ese resultado. Vuelve a pulsar “Buscar mejor hora de salida”.</div>'; return; }
+      progresoFin('#prog-barrido', !(r && r.ok === false));
       renderBarrido(r, pr);
     } finally { setOcupado(false); }
   }
@@ -2319,12 +2379,14 @@
   /* ===================== eventos ===================== */
   function enlazar() {
     enlazarMapaUI();
-    // avisos superiores: pausar / reanudar el desplazamiento
-    var bt = $('#btn-ticker');
-    if (bt) bt.addEventListener('click', function () {
-      var p = $('#ticker').classList.toggle('pausa');
-      bt.textContent = p ? 'Reanudar' : 'Pausar';
-    });
+    // botón fijo de abajo (celular): hace lo mismo que el botón grande y refleja su estado
+    var of = $('#btn-optimizar-fijo'), cf = $('#btn-cancelar-fijo'), ec = $('#estado-calc'), ef = $('#estado-fijo');
+    if (of) of.addEventListener('click', optimizarClick);
+    if (cf) cf.addEventListener('click', cancelarCalculo);
+    if (ec && ef && typeof MutationObserver !== 'undefined') {
+      new MutationObserver(function () { ef.textContent = ec.textContent; ef.hidden = !(ocupado && ec.textContent); }).observe(ec, { childList: true, characterData: true, subtree: true });
+    }
+    var tt = $('#toast'); if (tt) tt.addEventListener('click', function () { tt.hidden = true; });
 
     // pestañas
     $$('.tabs [role="tab"]').forEach(function (b, i, all) {
@@ -2600,7 +2662,7 @@
 
   /* ===================== arranque ===================== */
   function init() {
-    if (!Motor) { $('#aviso-motor').hidden = false; $('#btn-optimizar').disabled = true; $('#btn-barrido').disabled = true; }
+    if (!Motor) { $('#aviso-motor').hidden = false; $('#btn-optimizar').disabled = true; $('#btn-barrido').disabled = true; var of0 = $('#btn-optimizar-fijo'); if (of0) of0.disabled = true; }
     var restaurado = cargarLocal();
     initMapa();
     llenarFormulario();
